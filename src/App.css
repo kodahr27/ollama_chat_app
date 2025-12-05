@@ -1949,10 +1949,13 @@ pre {
 /* 🎯 STORAGE MANAGEMENT */
 .storage-management-modal {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
+  top: 2.5%;
+  bottom: 2.5%;
+  left: 2.5%;
+  right: 2.5%;
+  width: 95%;
+  height: 95%;
+  border-radius: 8px;
   z-index: 1000;
   display: flex;
   align-items: center;
@@ -3383,7 +3386,15 @@ pre {
     padding: var(--spacing-lg);
   }
   
-  .modal-content {
+  /* FIX FOR DIFF VIEWER ON MOBILE - CENTERED FULL SCREEN */
+  .storage-management-modal,
+  .diff-viewer-page {
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .diff-viewer-content {
     position: fixed;
     top: 2.5%;
     bottom: 2.5%;
@@ -3391,17 +3402,17 @@ pre {
     right: 2.5%;
     width: 95%;
     height: 95%;
-    max-height: unset;
-  }
-
-  .storage-management-modal,
-  .diff-viewer-page {
-    padding: var(--spacing-md);
+    border-radius: 8px;
+    box-shadow: none;
   }
   
-  .diff-viewer-content {
-    width: 95%;
-    height: 95%;
+  .modal-content {
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    box-shadow: none;
   }
 
   .stats-grid {
@@ -3437,6 +3448,16 @@ pre {
   .operation-code {
     font-size: 11px;
     padding: var(--spacing-xs);
+  }
+  
+  /* Adjust diff viewer header and footer for mobile */
+  .diff-viewer-header,
+  .diff-viewer-footer {
+    padding: var(--spacing-lg);
+  }
+  
+  .diff-viewer-filename {
+    font-size: var(--font-lg);
   }
 }
 
