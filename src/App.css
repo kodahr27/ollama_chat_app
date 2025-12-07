@@ -847,23 +847,23 @@ pre {
 
 .add-to-project-btn,
 .copy-artifact-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  background: transparent;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: all 0.2s ease;
+  );
 }
 
 .add-to-project-btn:hover,
 .copy-artifact-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--hover-bg);
+  color: var(--primary);
 }
 
 .expand-icon {
@@ -917,6 +917,178 @@ pre {
   color: var(--text-primary);
 }
 
+/* 🎯 EMPTY ARTIFACTS PLACEHOLDER */
+.empty-artifacts-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-2xl);
+  text-align: center;
+  height: 100%;
+  gap: var(--spacing-lg);
+}
+
+.empty-artifacts-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-xl);
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-lg);
+}
+
+.empty-artifacts-placeholder h3 {
+  font-size: var(--font-xl);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.empty-artifacts-placeholder p {
+  font-size: var(--font-base);
+  color: var(--text-secondary);
+  margin-bottom: var(--spacing-xl);
+  max-width: 300px;
+  line-height: 1.5;
+}
+
+.empty-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  width: 100%;
+  max-width: 250px;
+}
+
+.create-first-file-btn,
+.ask-ai-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md) var(--spacing-lg);
+  border: none;
+  border-radius: var(--radius-md);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-size: var(--font-sm);
+}
+
+.create-first-file-btn {
+  background: var(--accent-primary);
+  color: white;
+}
+
+.create-first-file-btn:hover {
+  background: var(--accent-hover);
+}
+
+.ask-ai-btn {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+}
+
+.ask-ai-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* 🎯 CREATE MENU */
+.create-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  margin-top: var(--spacing-xs);
+  min-width: 160px;
+  padding: var(--spacing-sm);
+}
+
+.create-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  width: 100%;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+  text-align: left;
+}
+
+.create-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+/* 🎯 FOLDER CREATION INPUT */
+.folder-creation-input {
+  padding: var(--spacing-md);
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-primary);
+}
+
+.folder-input {
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: var(--font-base);
+  margin-bottom: var(--spacing-sm);
+  transition: border-color var(--transition-fast);
+}
+
+.folder-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.folder-input-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.folder-input-btn {
+  flex: 1;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-size: var(--font-sm);
+  font-weight: 500;
+}
+
+.folder-input-btn.primary {
+  background: var(--accent-primary);
+  color: white;
+  border-color: var(--accent-primary);
+}
+
+.folder-input-btn.primary:hover {
+  background: var(--accent-hover);
+}
+
+.folder-input-btn:hover {
+  background: var(--bg-hover);
+}
+
 /* 🎯 OPTIMIZED ARTIFACT MANAGER FOR MOBILE */
 .artifact-manager {
   flex: 1;
@@ -948,6 +1120,7 @@ pre {
   padding: var(--spacing-md) var(--spacing-lg);
   border-bottom: 1px solid var(--border-light);
   background: var(--bg-primary);
+  position: relative;
 }
 
 .panel-title {
@@ -958,12 +1131,30 @@ pre {
   color: var(--text-primary);
 }
 
+.panel-actions-wrapper {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.artifacts-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .file-count {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
   font-size: var(--font-sm);
+}
+
+.creating-folder-container {
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-light);
 }
 
 .search-box {
@@ -2800,8 +2991,8 @@ pre {
 .model-dropdown-menu {
   position: absolute;
   top: 100%;
-  left: 0;
   right: 0;
+  width: fit-content;
   background: var(--bg-primary);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
@@ -3576,4 +3767,48 @@ pre {
     border: 1px solid #ccc !important;
     break-inside: avoid;
   }
+}
+
+/* Add to App.css */
+.added-badge {
+  background: var(--success-bg);
+  color: var(--success-text);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.8em;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.artifact-item.added {
+  background: var(--success-bg-light);
+  border-left: 3px solid var(--success);
+}
+
+.file-status-badge {
+  background: var(--success);
+  color: white;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.7em;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+}
+
+.added-icon {
+  color: var(--success);
+}
+
+.added-check {
+  color: var(--success);
+  opacity: 0.8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
 }

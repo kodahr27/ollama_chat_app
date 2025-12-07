@@ -44,6 +44,8 @@ import {
   Clock,
   RotateCcw,
   Code2,
+  FolderPlus,
+  FilePlus,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
@@ -122,6 +124,30 @@ const getLanguageFromPath = (path) => {
   return languageMap[ext] || 'text';
 };
 
+// Add this function to your utility functions section
+const loadBackupConversations = () => {
+  try {
+    const backupKeys = Object.keys(localStorage)
+      .filter(key => key.startsWith(APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX))
+      .sort()
+      .reverse();
+    
+    if (backupKeys.length > 0) {
+      const latestBackup = localStorage.getItem(backupKeys[0]);
+      if (latestBackup) {
+        const conversations = JSON.parse(latestBackup);
+        if (conversations && conversations.length > 0) {
+          localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(conversations));
+          return conversations;
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error loading backup:', error);
+  }
+  return null;
+};
+
 const formatBytes = (bytes) => {
   if (bytes === 0) return '0 Bytes';
   const k = 1024;
@@ -132,6 +158,58 @@ const formatBytes = (bytes) => {
 
 const formatDate = (date) => {
   return new Date(date).toLocaleString();
+};
+
+// 🎯 ADD DEDUPLICATION HELPER
+const deduplicateArtifacts = (artifacts) => {
+  const seen = new Set();
+  return artifacts.filter(artifact => {
+    const key = artifact.path;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+};
+
+// Add this function after your other utility functions
+const fixCorruptedArtifacts = (artifactsData) => {
+  if (!artifactsData || typeof artifactsData !== 'object') {
+    console.log("🔄 [FIX] No artifacts data to fix");
+    return {};
+  }
+  
+  const fixed = {};
+  
+  Object.keys(artifactsData).forEach(conversationId => {
+    const artifacts = artifactsData[conversationId];
+    
+    if (Array.isArray(artifacts)) {
+      // Filter out invalid artifacts and ensure they have required fields
+      const validArtifacts = artifacts.filter(artifact => 
+        artifact && 
+        typeof artifact === 'object' && 
+        artifact.path && 
+        artifact.content !== undefined
+      ).map(artifact => ({
+        ...artifact,
+        id: artifact.id || generateSafeId(`file-${artifact.path}`),
+        type: artifact.type || 'file',
+        createdBy: artifact.createdBy || 'unknown',
+        timestamp: artifact.timestamp || new Date().toISOString(),
+        language: artifact.language || getLanguageFromPath(artifact.path)
+      }));
+      
+      fixed[conversationId] = validArtifacts;
+      console.log(`🔄 [FIX] Fixed ${validArtifacts.length} artifacts for conversation ${conversationId}`);
+    } else {
+      console.log(`🔄 [FIX] Invalid artifacts for conversation ${conversationId}, resetting to empty array`);
+      fixed[conversationId] = [];
+    }
+  });
+  
+  return fixed;
 };
 
 const ENHANCED_SYSTEM_PROMPT = `You are an advanced AI coding assistant with intelligent file editing capabilities.
@@ -383,6 +461,10 @@ export default function App() {
   const [viewingEdit, setViewingEdit] = useState(null);
   const [showStorageManagement, setShowStorageManagement] = useState(false);
   const [currentEdits, setCurrentEdits] = useState([]);
+  const [showCreateMenu, setShowCreateMenu] = useState(false);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [showEmptyState, setShowEmptyState] = useState(true);
 
   const abortControllerRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -392,128 +474,16 @@ export default function App() {
   const fileInputRef = useRef(null);
   const scrollTimerRef = useRef(null);
   const loadTimerRef = useRef(null);
+  const createMenuRef = useRef(null);
+  const folderInputRef = useRef(null);
+  const saveTimeoutRef = useRef(null);
 
   // 🎯 DERIVED STATE
   const currentArtifacts = useMemo(() => {
     return artifacts[currentConversationId] || [];
   }, [artifacts, currentConversationId]);
 
-  // 🎯 INITIAL LOAD
-  useEffect(() => {
-    if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
-    
-    loadTimerRef.current = setTimeout(() => {
-      try {
-        // Load saved messages
-        const savedMessages = localStorage.getItem("ollama-chat-history");
-        if (savedMessages) setMessages(JSON.parse(savedMessages));
-        
-        // Load saved system prompt
-        const savedPrompt = localStorage.getItem("ollama-additional-system-prompt");
-        if (savedPrompt) setSystemPrompt(savedPrompt);
-        
-        // Load saved conversations
-        const savedConversations = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS);
-        if (savedConversations) {
-          const convos = JSON.parse(savedConversations);
-          setConversations(convos);
-          
-          // Find the active conversation and set it as current
-          const activeConvo = convos.find(c => c.active);
-          if (activeConvo) {
-            setCurrentConversationId(activeConvo.id);
-          }
-        }
-        
-        // Load saved artifacts
-        const savedArtifacts = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS);
-        if (savedArtifacts) setArtifacts(JSON.parse(savedArtifacts));
-        
-        // Load saved showArtifacts preference
-        const savedShowArtifacts = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.SHOW_ARTIFACTS);
-        if (savedShowArtifacts) setShowArtifacts(savedShowArtifacts === 'true');
-        
-        // Load saved selected model
-        const savedModel = localStorage.getItem("ollama-selected-model");
-        if (savedModel) setSelectedModel(savedModel);
-        
-        setInitialLoadComplete(true);
-      } catch (error) {
-        console.error("Initial load error:", error);
-        setInitialLoadComplete(true);
-      }
-    }, 50);
-    
-    return () => {
-      if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
-    };
-  }, []);
-  
-  // 🎯 ADD THIS RIGHT AFTER THE INITIAL LOAD useEffect - FETCH MODELS ON LOAD
-  useEffect(() => {
-    if (initialLoadComplete) {
-      const timer = setTimeout(() => {
-        fetchModels();
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [initialLoadComplete]);
-
-  // 🎯 SCROLL HANDLING
-  const handleScroll = useCallback(() => {
-    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
-    
-    scrollTimerRef.current = setTimeout(() => {
-      if (!messagesContainerRef.current) return;
-      const container = messagesContainerRef.current;
-      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < APP_CONFIG.TIMEOUTS.AUTO_SCROLL_PADDING;
-      
-      if (isNearBottom || messages.length <= 2) {
-        messagesEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
-      }
-    }, 100);
-  }, [messages.length]);
-
-  useEffect(() => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-    
-    container.addEventListener('scroll', handleScroll);
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [handleScroll]);
-
-  useEffect(() => {
-    if (messages.length > 0 && messagesContainerRef.current) {
-      const timer = setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
-      }, 150);
-      return () => clearTimeout(timer);
-    }
-  }, [messages.length]);
-
-  // 🎯 STRING SIMILARITY HELPER
-  const calculateSimilarity = useCallback((str1, str2) => {
-    if (str1 === str2) return 1;
-    
-    const cleanStr1 = str1.replace(/\s+/g, ' ').trim();
-    const cleanStr2 = str2.replace(/\s+/g, ' ').trim();
-    
-    if (cleanStr1 === cleanStr2) return 1;
-    if (cleanStr1.includes(cleanStr2) || cleanStr2.includes(cleanStr1)) return 0.9;
-    
-    const maxLen = 1000;
-    const limitedStr1 = cleanStr1.length > maxLen ? cleanStr1.substring(0, maxLen) : cleanStr1;
-    const limitedStr2 = cleanStr2.length > maxLen ? cleanStr2.substring(0, maxLen) : cleanStr2;
-    
-    const set1 = new Set(limitedStr1.split(/\s+/));
-    const set2 = new Set(limitedStr2.split(/\s+/));
-    const intersection = new Set([...set1].filter(x => set2.has(x)));
-    const union = new Set([...set1, ...set2]);
-    
-    return intersection.size / union.size;
-  }, []);
-  
-  // 🎯 PARSE SEARCH/REPLACE
+  // 🎯 PARSE SEARCH/REPLACE - MUST BE DEFINED BEFORE parseLLMResponse
   const parseSearchReplace = useCallback((content) => {
     if (!content || typeof content !== 'string' || content.length < 20) {
       return [];
@@ -548,8 +518,17 @@ export default function App() {
     
     const limitedOperations = operations.slice(0, 20);
     
+    // Normalize whitespace for comparison while preserving structure
+    const normalizeForComparison = (str) => {
+      // Preserve line structure but normalize spaces/tabs within lines
+      return str.split('\n').map(line => {
+        const leadingWhitespace = line.match(/^[\s]*/)[0];
+        const content = line.trim();
+        return { leadingWhitespace, content, original: line };
+      });
+    };
+    
     // Sort operations to apply them from the end to beginning
-    // This prevents issues when earlier replacements affect later search patterns
     const sortedOperations = [...limitedOperations].map((op, index) => ({
       ...op,
       originalIndex: index
@@ -560,22 +539,67 @@ export default function App() {
       const op = sortedOperations[i];
       const { search, replace } = op;
       
-      // Find the last occurrence to apply from the end
-      const lastIndex = result.lastIndexOf(search);
-      if (lastIndex !== -1) {
+      // First try exact match
+      let lastIndex = result.lastIndexOf(search);
+      
+      // If exact match fails, try fuzzy matching with normalized whitespace
+      if (lastIndex === -1) {
+        const searchLines = normalizeForComparison(search);
+        const resultLines = result.split('\n');
+        
+        // Try to find a fuzzy match
+        for (let startIdx = resultLines.length - 1; startIdx >= 0; startIdx--) {
+          let matchFound = true;
+          const potentialMatch = [];
+          
+          for (let j = 0; j < searchLines.length && startIdx + j < resultLines.length; j++) {
+            const resultLine = resultLines[startIdx + j];
+            const searchLine = searchLines[j];
+            
+            // Compare content, ignoring differences in indentation amount
+            const resultContent = resultLine.trim();
+            
+            if (resultContent !== searchLine.content) {
+              matchFound = false;
+              break;
+            }
+            potentialMatch.push(resultLines[startIdx + j]);
+          }
+          
+          if (matchFound && potentialMatch.length === searchLines.length) {
+            // Found a fuzzy match - replace it
+            const matchStr = potentialMatch.join('\n');
+            const beforeMatch = resultLines.slice(0, startIdx).join('\n');
+            const afterMatch = resultLines.slice(startIdx + searchLines.length).join('\n');
+            
+            result = beforeMatch + 
+                    (beforeMatch ? '\n' : '') + 
+                    replace + 
+                    (afterMatch ? '\n' : '') + 
+                    afterMatch;
+            appliedCount++;
+            lastIndex = 0; // Mark as found
+            break;
+          }
+        }
+      } else {
+        // Exact match found
         result = result.substring(0, lastIndex) + 
                  replace + 
                  result.substring(lastIndex + search.length);
         appliedCount++;
-      } else {
+      }
+      
+      if (lastIndex === -1) {
         failedOps.push({ 
           index: op.originalIndex + 1, 
           search: search.substring(0, 100) + (search.length > 100 ? '...' : ''),
-          reason: 'No exact match found.',
+          reason: 'No exact or fuzzy match found. Check whitespace and indentation.',
           debug: {
             searchLength: search.length,
-            originalFirst50: originalContent.substring(0, 50),
-            resultFirst50: result.substring(0, 50)
+            searchLines: search.split('\n').length,
+            searchFirst50: search.substring(0, 50).replace(/\n/g, '\\n'),
+            resultFirst50: result.substring(0, 50).replace(/\n/g, '\\n')
           }
         });
       }
@@ -584,21 +608,307 @@ export default function App() {
     return { result, appliedCount, failedOps };
   }, []);
 
-  // 🎯 STORAGE MANAGER
+  // 🎯 STRING SIMILARITY HELPER
+  const calculateSimilarity = useCallback((str1, str2) => {
+    if (str1 === str2) return 1;
+    
+    const cleanStr1 = str1.replace(/\s+/g, ' ').trim();
+    const cleanStr2 = str2.replace(/\s+/g, ' ').trim();
+    
+    if (cleanStr1 === cleanStr2) return 1;
+    if (cleanStr1.includes(cleanStr2) || cleanStr2.includes(cleanStr1)) return 0.9;
+    
+    const maxLen = 1000;
+    const limitedStr1 = cleanStr1.length > maxLen ? cleanStr1.substring(0, maxLen) : cleanStr1;
+    const limitedStr2 = cleanStr2.length > maxLen ? cleanStr2.substring(0, maxLen) : cleanStr2;
+    
+    const set1 = new Set(limitedStr1.split(/\s+/));
+    const set2 = new Set(limitedStr2.split(/\s+/));
+    const intersection = new Set([...set1].filter(x => set2.has(x)));
+    const union = new Set([...set1, ...set2]);
+    
+    return intersection.size / union.size;
+  }, []);
+
+  // 🎯 PARSE LLM RESPONSE - MUST BE AFTER parseSearchReplace
+  const parseLLMResponse = useCallback((message) => {
+    try {
+      if (!message || typeof message !== 'string') {
+        return { content: '', artifacts: [], edits: [] };
+      }
+
+      const maxMessageSize = 50000;
+      const limitedMessage = message.length > maxMessageSize 
+        ? message.substring(0, maxMessageSize) + '\n... (truncated for performance)' 
+        : message;
+
+      const artifacts = [];
+      const edits = [];
+      let regularContent = limitedMessage;
+
+      // Parse edit blocks
+      const editBlockRegex = /```(?:edit)?\s*\r?\n([\s\S]*?)\r?\n```/gi;
+      const editBlocks = [];
+      let editMatch;
+      
+      while ((editMatch = editBlockRegex.exec(limitedMessage)) !== null && editBlocks.length < 5) {
+        editBlocks.push({
+          fullMatch: editMatch[0],
+          content: editMatch[1],
+          index: editMatch.index
+        });
+      }
+
+      // Map to consolidate edits for the same file
+      const editsByFile = new Map();
+      
+      for (const block of editBlocks) {
+        const fileMarkerMatch = block.content.match(/(?:@@@|\/\/\/|#|File:|file:|filename:)\s*(.+)/i);
+        let targetFile = null;
+        let editContent = block.content;
+        
+        if (fileMarkerMatch) {
+          targetFile = validateAndSanitizePath(fileMarkerMatch[1].trim());
+          editContent = block.content.replace(fileMarkerMatch[0], '').trim();
+        } else {
+          // Try to find file marker in the first few lines
+          const lines = block.content.split('\n');
+          for (let i = 0; i < Math.min(3, lines.length); i++) {
+            const lineMatch = lines[i].match(/(?:@@@|\/\/\/|#|File:|file:|filename:)\s*(.+)/i);
+            if (lineMatch) {
+              targetFile = validateAndSanitizePath(lineMatch[1].trim());
+              // Remove the file marker line from editContent
+              editContent = lines.slice(i + 1).join('\n').trim();
+              break;
+            }
+          }
+        }
+        
+        const operations = parseSearchReplace(editContent);
+        
+        if (operations.length > 0) {
+          regularContent = regularContent.replace(block.fullMatch, '');
+          
+          const finalPath = targetFile || 'unknown';
+          
+          // Check if we already have edits for this file
+          if (editsByFile.has(finalPath)) {
+            // Append operations to existing edit
+            const existingEdit = editsByFile.get(finalPath);
+            existingEdit.operations.push(...operations);
+            existingEdit.operationCount += operations.length;
+          } else {
+            // Create new edit group
+            const editGroup = {
+              path: finalPath,
+              operations: operations,
+              id: generateSafeId(`edit-${finalPath}`),
+              type: 'search_replace',
+              timestamp: new Date().toISOString(),
+              rawContent: block.fullMatch,
+              parsedContent: editContent,
+              applied: false,
+              operationCount: operations.length
+            };
+            
+            editsByFile.set(finalPath, editGroup);
+          }
+        }
+      }
+      
+      // Convert map values to array
+      const consolidatedEdits = Array.from(editsByFile.values());
+      edits.push(...consolidatedEdits);
+
+      // Parse file creation blocks - ENHANCED with more patterns
+      const filePatterns = [
+        // Pattern 1: // filename: path or # filename: path
+        /```(\w+)?\s*\r?\n\s*(?:\/\/|#)\s*(?:filename|file):\s*([^\r\n]+)\r?\n([\s\S]*?)```/gi,
+        // Pattern 2: /* filename: path */
+        /```(\w+)?\s*\r?\n\s*\/\*\s*(?:filename|file):\s*([^\r\n]+?)\s*\*\/\r?\n([\s\S]*?)```/gi,
+        // Pattern 3: Filename at top (no comment syntax)
+        /```(\w+)?\s*\r?\n\s*([a-zA-Z0-9_\-\/\.]+\.\w+)\r?\n([\s\S]*?)```/gi,
+      ];
+
+      for (const pattern of filePatterns) {
+        let match;
+        pattern.lastIndex = 0;
+        
+        while ((match = pattern.exec(regularContent)) !== null && artifacts.length < 10) {
+          const language = match[1] || 'text';
+          const rawFilePath = match[2].trim();
+          const content = match[3].trim();
+          
+          // Skip if this looks like edit syntax
+          if (content.includes('<<<<<<< SEARCH') || content.includes('=======') || content.includes('>>>>>>> REPLACE')) {
+            continue;
+          }
+          
+          // Skip if the "filename" looks like actual code
+          if (rawFilePath.includes('(') || rawFilePath.includes('{') || rawFilePath.includes('=')) {
+            continue;
+          }
+          
+          const filePath = validateAndSanitizePath(rawFilePath);
+          const detectedLanguage = language === 'text' ? getLanguageFromPath(filePath) : language;
+          
+          const artifact = {
+            path: filePath,
+            content: content,
+            language: detectedLanguage,
+            id: generateSafeId(`artifact-${filePath}`),
+            type: 'file',
+            createdBy: 'ai',
+            timestamp: new Date().toISOString(),
+            source: 'parsed',
+            // Add metadata for display
+            lineCount: content.split('\n').length,
+            size: content.length,
+            addedToProject: false // Will be set to true when added
+          };
+          
+          artifacts.push(artifact);
+          regularContent = regularContent.replace(match[0], '');
+        }
+      }
+
+      // Also look for inline file markers without code blocks
+      const inlineFilePatterns = [
+        /File:\s*([^\s]+)\s*\n```(\w+)?\s*\n([\s\S]*?)```/gi,
+        /filename:\s*([^\s]+)\s*\n```(\w+)?\s*\n([\s\S]*?)```/gi,
+        /##\s*FILE:\s*([^\n]+)\s*\n```(\w+)?\s*\n([\s\S]*?)```/gi
+      ];
+      
+      for (const pattern of inlineFilePatterns) {
+        let match;
+        pattern.lastIndex = 0;
+        
+        while ((match = pattern.exec(regularContent)) !== null && artifacts.length < 5) {
+          const rawFilePath = match[1].trim();
+          const language = match[2] || 'text';
+          const content = match[3].trim();
+          
+          if (content.includes('<<<<<<< SEARCH') || content.includes('=======') || content.includes('>>>>>>> REPLACE')) {
+            continue;
+          }
+          
+          const filePath = validateAndSanitizePath(rawFilePath);
+          const detectedLanguage = language === 'text' ? getLanguageFromPath(filePath) : language;
+          
+          const artifact = {
+            path: filePath,
+            content: content,
+            language: detectedLanguage,
+            id: generateSafeId(`artifact-${filePath}`),
+            type: 'file',
+            createdBy: 'ai',
+            timestamp: new Date().toISOString(),
+            source: 'inline',
+            lineCount: content.split('\n').length,
+            size: content.length,
+            addedToProject: false
+          };
+          
+          artifacts.push(artifact);
+          regularContent = regularContent.replace(match[0], '');
+        }
+      }
+
+      // Clean up regular content
+      regularContent = regularContent
+        .replace(/\n\s*\n\s*\n/g, '\n\n')
+        .replace(/^\s+|\s+$/g, '')
+        .trim();
+
+      // Parse instructions if any
+      const instructions = [];
+      if (regularContent.includes('1.') || regularContent.includes('First,') || regularContent.includes('Step')) {
+        const instructionLines = regularContent.split('\n').filter(line => 
+          line.trim().match(/^\d+\./) || 
+          line.trim().toLowerCase().startsWith('step') ||
+          line.trim().toLowerCase().startsWith('first') ||
+          line.trim().toLowerCase().startsWith('next') ||
+          line.trim().toLowerCase().startsWith('then') ||
+          line.trim().toLowerCase().startsWith('finally')
+        ).slice(0, 10);
+        
+        if (instructionLines.length > 0) {
+          instructions.push(...instructionLines.map(line => line.trim()));
+        }
+      }
+
+      return {
+        content: regularContent,
+        artifacts: artifacts.slice(0, 10),
+        edits: edits.slice(0, 5),
+        instructions: instructions,
+        metadata: {
+          totalArtifacts: artifacts.length,
+          totalEdits: edits.length,
+          parsedAt: new Date().toISOString()
+        }
+      };
+    } catch (error) {
+      console.error('Error parsing LLM response:', error);
+      return { 
+        content: message, 
+        artifacts: [], 
+        edits: [],
+        instructions: [],
+        metadata: {
+          totalArtifacts: 0,
+          totalEdits: 0,
+          parsedAt: new Date().toISOString(),
+          error: error.message
+        }
+      };
+    }
+  }, [parseSearchReplace]);
+
+  // 🎯 FIXED: saveArtifacts with better debouncing
   const saveArtifacts = useCallback((newArtifacts) => {
     try {
+      console.log("💾 [SAVE] Saving artifacts to localStorage:", 
+        Object.keys(newArtifacts).length, "conversations");
+      
+      // If artifacts are empty, remove from localStorage
+      if (!newArtifacts || Object.keys(newArtifacts).length === 0) {
+        console.log("💾 [SAVE] No artifacts to save, removing from localStorage");
+        localStorage.removeItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS);
+        return;
+      }
+      
+      // Save the artifacts
       const dataSize = new Blob([JSON.stringify(newArtifacts)]).size;
       if (dataSize > APP_CONFIG.LIMITS.MAX_STORAGE_BYTES * 0.9) {
-        console.warn('Storage approaching limit');
+        console.warn('💾 [SAVE] Storage approaching limit');
       }
       
       localStorage.setItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS, JSON.stringify(newArtifacts));
+      console.log("💾 [SAVE] Artifacts saved successfully");
       
+      // Create backup
       setTimeout(() => {
         try {
-          const backupKey = `${APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX}${Date.now()}`;
-          localStorage.setItem(backupKey, JSON.stringify(newArtifacts));
+          const backupData = {
+            version: '3.0',
+            type: 'complete-backup',
+            timestamp: Date.now(),
+            date: new Date().toISOString(),
+            conversations: conversations,
+            artifacts: newArtifacts,
+            metadata: {
+              conversationCount: conversations.length,
+              totalFiles: Object.values(newArtifacts).reduce((sum, files) => sum + files.length, 0),
+              app: 'Ollama Chat',
+              version: '3.0'
+            }
+          };
           
+          const backupKey = `${APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX}${Date.now()}`;
+          localStorage.setItem(backupKey, JSON.stringify(backupData));
+          
+          // Clean up old backups
           const backupKeys = Object.keys(localStorage)
             .filter(key => key.startsWith(APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX))
             .sort()
@@ -609,15 +919,16 @@ export default function App() {
               localStorage.removeItem(key);
             });
           }
+          
         } catch (e) {
-          console.warn('Could not create backup:', e);
+          console.warn('💾 [BACKUP] Could not create backup:', e);
         }
       }, 100);
     } catch (error) {
-      console.error('Error saving artifacts:', error);
+      console.error('❌ [SAVE] Error saving artifacts:', error);
     }
-  }, []);
-  
+  }, [conversations]);
+
   const saveSelectedModel = useCallback((modelName) => {
     try {
       const asString = typeof modelName === "string"
@@ -631,6 +942,92 @@ export default function App() {
       console.error("Error saving selected model:", error);
     }
   }, []);
+
+  // 🎯 FIXED: Optimized saveConversations function - UPDATED VERSION
+  const saveConversations = useCallback((updatedConversations = conversations, forceSave = false) => {
+    try {
+      console.log("💾 [SAVE] Starting saveConversations");
+      console.log("💾 [SAVE] Current conversation ID:", currentConversationId);
+      console.log("💾 [SAVE] Current messages:", messages.length);
+      console.log("💾 [SAVE] Current conversations:", conversations.length);
+      
+      // If there's no current conversation ID but we have messages, create one
+      if (!currentConversationId && messages.length > 0) {
+        console.log("💾 [SAVE] No conversation ID but messages exist, creating new conversation");
+        const newConvId = generateSafeId('conv');
+        const newConversation = {
+          id: newConvId,
+          title: messages[0]?.content?.substring(0, 50) + (messages[0]?.content?.length > 50 ? '...' : '') || 'New Conversation',
+          messages: [...messages], // Create a copy of messages
+          lastUpdated: new Date().toISOString(),
+          active: true,
+          artifactCount: currentArtifacts.length
+        };
+        
+        setCurrentConversationId(newConvId);
+        const withNewConversation = [newConversation, ...updatedConversations];
+        setConversations(withNewConversation);
+        
+        // Also update artifacts for this new conversation
+        const updatedArtifacts = { ...artifacts, [newConvId]: currentArtifacts };
+        setArtifacts(updatedArtifacts);
+        
+        localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(withNewConversation));
+        localStorage.setItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS, JSON.stringify(updatedArtifacts));
+        console.log("💾 [SAVE] Created and saved new conversation:", newConvId);
+        return;
+      }
+      
+      // Update current conversation with latest messages
+      const conversationsWithCurrentUpdated = updatedConversations.map(conv => {
+        if (conv.id === currentConversationId) {
+          console.log("💾 [SAVE] Updating conversation:", currentConversationId, "with", messages.length, "messages");
+          return {
+            ...conv,
+            messages: [...messages], // CRITICAL: Update with current messages
+            lastUpdated: new Date().toISOString(),
+            title: messages.length > 0 
+              ? (messages[0]?.content?.substring(0, 50) + (messages[0]?.content?.length > 50 ? '...' : '')) 
+              : conv.title || 'New Conversation',
+            artifactCount: currentArtifacts.length
+          };
+        }
+        return { ...conv, active: false };
+      });
+      
+      // If conversation doesn't exist, add it
+      const conversationExists = conversationsWithCurrentUpdated.some(conv => conv.id === currentConversationId);
+      if (currentConversationId && messages.length > 0 && !conversationExists) {
+        console.log("💾 [SAVE] Adding new conversation to list:", currentConversationId);
+        const newConversation = {
+          id: currentConversationId,
+          title: messages[0]?.content?.substring(0, 50) + (messages[0]?.content?.length > 50 ? '...' : '') || 'New Conversation',
+          messages: [...messages],
+          lastUpdated: new Date().toISOString(),
+          active: true,
+          artifactCount: currentArtifacts.length
+        };
+        conversationsWithCurrentUpdated.unshift(newConversation);
+      }
+      
+      console.log("💾 [SAVE] Final conversations to save:", conversationsWithCurrentUpdated.length);
+      conversationsWithCurrentUpdated.forEach((conv, idx) => {
+        console.log(`💾 [SAVE] Conversation ${idx}: ${conv.id}, messages: ${conv.messages?.length || 0}, active: ${conv.active}`);
+      });
+      
+      setConversations(conversationsWithCurrentUpdated);
+      localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(conversationsWithCurrentUpdated));
+      
+      // Update legacy storage for compatibility
+      if (currentConversationId && messages.length > 0) {
+        localStorage.setItem("ollama-chat-history", JSON.stringify(messages));
+      }
+      
+      console.log("💾 [SAVE] Conversations saved successfully");
+    } catch (error) {
+      console.error("❌ [SAVE] Error saving conversations:", error);
+    }
+  }, [currentConversationId, messages, conversations, currentArtifacts.length, initialLoadComplete, artifacts]);
 
   const getStorageInfo = useCallback(() => {
     try {
@@ -700,159 +1097,6 @@ export default function App() {
     
     return null;
   }, []);
-
-  const parseLLMResponse = useCallback((message) => {
-    try {
-      if (!message || typeof message !== 'string') {
-        return { content: '', artifacts: [], edits: [] };
-      }
-  
-      const maxMessageSize = 50000;
-      const limitedMessage = message.length > maxMessageSize 
-        ? message.substring(0, maxMessageSize) + '\n... (truncated for performance)' 
-        : message;
-  
-      const artifacts = [];
-      const edits = [];
-      let regularContent = limitedMessage;
-  
-      // Parse edit blocks
-      const editBlockRegex = /```(?:edit)?\s*\r?\n([\s\S]*?)\r?\n```/gi;
-      const editBlocks = [];
-      let editMatch;
-      
-      while ((editMatch = editBlockRegex.exec(limitedMessage)) !== null && editBlocks.length < 5) {
-        editBlocks.push({
-          fullMatch: editMatch[0],
-          content: editMatch[1],
-          index: editMatch.index
-        });
-      }
-  
-      // Map to consolidate edits for the same file
-      const editsByFile = new Map();
-      
-      for (const block of editBlocks) {
-        const fileMarkerMatch = block.content.match(/(?:@@@|\/\/\/|#|File:|file:|filename:)\s*(.+)/i);
-        let targetFile = null;
-        let editContent = block.content;
-        
-        if (fileMarkerMatch) {
-          targetFile = validateAndSanitizePath(fileMarkerMatch[1].trim());
-          editContent = block.content.replace(fileMarkerMatch[0], '').trim();
-        } else {
-          // Try to find file marker in the first few lines
-          const lines = block.content.split('\n');
-          for (let i = 0; i < Math.min(3, lines.length); i++) {
-            const lineMatch = lines[i].match(/(?:@@@|\/\/\/|#|File:|file:|filename:)\s*(.+)/i);
-            if (lineMatch) {
-              targetFile = validateAndSanitizePath(lineMatch[1].trim());
-              // Remove the file marker line from editContent
-              editContent = lines.slice(i + 1).join('\n').trim();
-              break;
-            }
-          }
-        }
-        
-        const operations = parseSearchReplace(editContent);
-        
-        if (operations.length > 0) {
-          regularContent = regularContent.replace(block.fullMatch, '');
-          
-          const finalPath = targetFile || 'unknown';
-          
-          // Check if we already have edits for this file
-          if (editsByFile.has(finalPath)) {
-            // Append operations to existing edit
-            const existingEdit = editsByFile.get(finalPath);
-            existingEdit.operations.push(...operations);
-            existingEdit.operationCount += operations.length;
-          } else {
-            // Create new edit group
-            const editGroup = {
-              path: finalPath,
-              operations: operations,
-              id: generateSafeId(`edit-${finalPath}`),
-              type: 'search_replace',
-              timestamp: new Date().toISOString(),
-              rawContent: block.fullMatch,
-              parsedContent: editContent,
-              applied: false,
-              operationCount: operations.length
-            };
-            
-            editsByFile.set(finalPath, editGroup);
-          }
-        }
-      }
-      
-      // Convert map values to array
-      const consolidatedEdits = Array.from(editsByFile.values());
-      edits.push(...consolidatedEdits);
-  
-      // Parse file creation blocks - ENHANCED with more patterns
-      const filePatterns = [
-        // Pattern 1: // filename: path or # filename: path
-        /```(\w+)?\s*\r?\n\s*(?:\/\/|#)\s*(?:filename|file):\s*([^\r\n]+)\r?\n([\s\S]*?)```/gi,
-        // Pattern 2: /* filename: path */
-        /```(\w+)?\s*\r?\n\s*\/\*\s*(?:filename|file):\s*([^\r\n]+?)\s*\*\/\r?\n([\s\S]*?)```/gi,
-        // Pattern 3: Filename at top (no comment syntax)
-        /```(\w+)?\s*\r?\n\s*([a-zA-Z0-9_\-\/\.]+\.\w+)\r?\n([\s\S]*?)```/gi,
-      ];
-  
-      for (const pattern of filePatterns) {
-        let match;
-        pattern.lastIndex = 0;
-        
-        while ((match = pattern.exec(regularContent)) !== null && artifacts.length < 10) {
-          const language = match[1] || 'text';
-          const rawFilePath = match[2].trim();
-          const content = match[3].trim();
-          
-          // Skip if this looks like edit syntax
-          if (content.includes('<<<<<<< SEARCH') || content.includes('=======') || content.includes('>>>>>>> REPLACE')) {
-            continue;
-          }
-          
-          // Skip if the "filename" looks like actual code
-          if (rawFilePath.includes('(') || rawFilePath.includes('{') || rawFilePath.includes('=')) {
-            continue;
-          }
-          
-          const filePath = validateAndSanitizePath(rawFilePath);
-          const detectedLanguage = language === 'text' ? getLanguageFromPath(filePath) : language;
-          
-          const artifact = {
-            path: filePath,
-            content: content,
-            language: detectedLanguage,
-            id: generateSafeId(`artifact-${filePath}`),
-            type: 'artifact',
-            timestamp: new Date().toISOString(),
-            source: 'parsed'
-          };
-          
-          artifacts.push(artifact);
-          regularContent = regularContent.replace(match[0], '');
-        }
-      }
-  
-      // Clean up regular content
-      regularContent = regularContent
-        .replace(/\n\s*\n\s*\n/g, '\n\n')
-        .replace(/^\s+|\s+$/g, '')
-        .trim();
-  
-      return {
-        content: regularContent,
-        artifacts: artifacts.slice(0, 10),
-        edits: edits.slice(0, 5)
-      };
-    } catch (error) {
-      console.error('Error parsing LLM response:', error);
-      return { content: message, artifacts: [], edits: [] };
-    }
-  }, [parseSearchReplace]);
 
   const getEnhancedFileContext = useCallback((artifacts, userInput, currentEdits = []) => {
     if (artifacts.length === 0) {
@@ -942,28 +1186,77 @@ export default function App() {
   }, [messages, initialLoadComplete]);
 
   const handleArtifactUpdate = useCallback((newArtifacts) => {
-    const updatedArtifacts = { ...artifacts, [currentConversationId]: newArtifacts };
+    console.log("🔄 [DEBUG] handleArtifactUpdate called with:", newArtifacts.length, "artifacts");
+    console.log("🔄 [DEBUG] Current conversation ID:", currentConversationId);
+    
+    if (!currentConversationId) {
+      console.error("❌ [DEBUG] No current conversation ID - creating new one");
+      const newConvId = generateSafeId('conv');
+      setCurrentConversationId(newConvId);
+      
+      const deduplicated = deduplicateArtifacts(newArtifacts);
+      const updatedArtifacts = { 
+        [newConvId]: deduplicated 
+      };
+      
+      console.log("🔄 [DEBUG] Setting artifacts with new conversation ID");
+      setArtifacts(updatedArtifacts);
+      
+      setTimeout(() => {
+        try {
+          saveArtifacts(updatedArtifacts);
+          console.log("💾 [DEBUG] Artifacts saved to localStorage with new conversation");
+        } catch (error) {
+          console.error("❌ [DEBUG] Error saving artifacts:", error);
+        }
+      }, 50);
+      return;
+    }
+    
+    // Remove duplicates before updating
+    const deduplicated = deduplicateArtifacts(newArtifacts);
+    console.log("🔄 [DEBUG] After deduplication:", deduplicated.length, "artifacts");
+    
+    const updatedArtifacts = { 
+      ...artifacts, 
+      [currentConversationId]: deduplicated 
+    };
+    
+    console.log("🔄 [DEBUG] Setting artifacts state...");
     setArtifacts(updatedArtifacts);
     
+    // Force a state update to ensure UI refreshes
     setTimeout(() => {
-      saveArtifacts(updatedArtifacts);
+      try {
+        saveArtifacts(updatedArtifacts);
+        console.log("💾 [DEBUG] Artifacts saved to localStorage");
+      } catch (error) {
+        console.error("❌ [DEBUG] Error saving artifacts:", error);
+      }
     }, 50);
   }, [artifacts, currentConversationId, saveArtifacts]);
 
+  // 🎯 FIXED: Single message saving useEffect with proper debouncing
   useEffect(() => {
-    if (!initialLoadComplete) return;
+    if (!initialLoadComplete || !currentConversationId || messages.length === 0) return;
     
-    if (messages.length > 0) {
-      const timer = setTimeout(() => {
-        try {
-          localStorage.setItem("ollama-chat-history", JSON.stringify(messages));
-        } catch (error) {
-          console.error('Error saving messages:', error);
-        }
-      }, 200);
-      return () => clearTimeout(timer);
+    // Clear any existing timeout
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
     }
-  }, [messages, initialLoadComplete]);
+    
+    // Set a new timeout with longer debounce
+    saveTimeoutRef.current = setTimeout(() => {
+      console.log("💾 [AUTO-SAVE] Auto-saving conversation after message change");
+      saveConversations(conversations);
+    }, 1000); // Increased to 1 second for better debouncing
+    
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [messages, currentConversationId, conversations, initialLoadComplete, saveConversations]);
 
   useEffect(() => {
     if (!initialLoadComplete) return;
@@ -971,40 +1264,106 @@ export default function App() {
     localStorage.setItem("ollama-additional-system-prompt", systemPrompt);
   }, [systemPrompt, initialLoadComplete]);
 
+  // 🎯 FIXED: Conversation changes saving
   useEffect(() => {
-    if (!initialLoadComplete) return;
+    if (!initialLoadComplete || conversations.length === 0) return;
     
-    if (conversations.length > 0) {
-      const timer = setTimeout(() => {
-        try {
-          localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(conversations));
-        } catch (error) {
-          console.error('Error saving conversations:', error);
-        }
-      }, 200);
-      return () => clearTimeout(timer);
-    }
-  }, [conversations, initialLoadComplete]);
+    // Use a debounce for conversation changes
+    const timer = setTimeout(() => {
+      console.log("💾 [CONVO-CHANGE] Saving conversation changes");
+      saveConversations(conversations, true); // Force save for conversation changes
+    }, 500);
+    
+    return () => clearTimeout(timer);
+  }, [conversations, initialLoadComplete, saveConversations]);
 
+  // 🎯 FIXED: Properly initialize when conversation loads
   useEffect(() => {
-    if (!initialLoadComplete || !currentConversationId || messages.length === 0) return;
+    if (!initialLoadComplete || !currentConversationId) return;
     
-    setConversations(prev => 
-      prev.map(conv => 
-        conv.id === currentConversationId 
-          ? { ...conv, messages, lastUpdated: new Date().toISOString(), title: messages.find(m => m.role === 'user')?.content.substring(0, 30) + '...' || conv.title }
-          : conv
-      )
-    );
-  }, [messages, currentConversationId, initialLoadComplete]);
+    console.log("🔄 [CONVO] Current conversation changed:", currentConversationId);
+    console.log("🔄 [CONVO] Available artifacts for this conversation:", 
+      artifacts[currentConversationId]?.length || 0, "files");
+    
+    // If this conversation has artifacts, don't show empty state
+    if (artifacts[currentConversationId] && artifacts[currentConversationId].length > 0) {
+      console.log("🔄 [CONVO] Conversation has artifacts, hiding empty state");
+      setShowEmptyState(false);
+      
+      // Auto-show artifacts panel if there are files
+      const savedPreference = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.SHOW_ARTIFACTS);
+      const shouldShow = savedPreference === null ? true : savedPreference === 'true';
+      if (shouldShow && !showArtifacts) {
+        console.log("🔄 [CONVO] Auto-showing artifacts panel");
+        setShowArtifacts(true);
+      }
+    } else {
+      console.log("🔄 [CONVO] Conversation has no artifacts, showing empty state");
+      setShowEmptyState(true);
+    }
+  }, [currentConversationId, artifacts, initialLoadComplete, showArtifacts]);
 
   useEffect(() => {
     return () => {
       if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
       if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
       if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
   }, []);
+
+  // Close create menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (createMenuRef.current && !createMenuRef.current.contains(event.target)) {
+        setShowCreateMenu(false);
+      }
+    };
+    
+    if (showCreateMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showCreateMenu]);
+
+  // Focus folder input when creating folder
+  useEffect(() => {
+    if (creatingFolder && folderInputRef.current) {
+      folderInputRef.current.focus();
+    }
+  }, [creatingFolder]);
+
+  // 🎯 SCROLL HANDLING
+  const handleScroll = useCallback(() => {
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    
+    scrollTimerRef.current = setTimeout(() => {
+      if (!messagesContainerRef.current) return;
+      const container = messagesContainerRef.current;
+      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < APP_CONFIG.TIMEOUTS.AUTO_SCROLL_PADDING;
+      
+      if (isNearBottom || messages.length <= 2) {
+        messagesEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+      }
+    }, 100);
+  }, [messages.length]);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [handleScroll]);
+
+  useEffect(() => {
+    if (messages.length > 0 && messagesContainerRef.current) {
+      const timer = setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [messages.length]);
 
   // 🎯 EVENT HANDLERS
   const handleImageSelect = useCallback((file) => {
@@ -1052,45 +1411,98 @@ export default function App() {
   }, [currentConversationId, artifacts, saveArtifacts]);
 
   const createNewConversation = useCallback(() => {
+    console.log("🔄 [NEW] Creating new conversation...");
+    
     const newConversation = {
       id: generateSafeId('conv'),
       title: 'New Conversation',
       messages: [],
       lastUpdated: new Date().toISOString(),
-      active: true
+      active: true,
+      artifactCount: 0
     };
     
-    setConversations(prev => [newConversation, ...prev.map(conv => ({ ...conv, active: false }))]);
+    // Deactivate all other conversations
+    const updatedConversations = conversations.map(conv => ({ 
+      ...conv, 
+      active: false 
+    }));
+    
+    // Add the new conversation at the beginning
+    updatedConversations.unshift(newConversation);
+    
+    // Update states
+    setConversations(updatedConversations);
     setCurrentConversationId(newConversation.id);
     setMessages([]);
     setImageFile(null);
     setImagePreview(null);
     setShowSidePanel(false);
     setShowArtifacts(false);
-  }, []);
+    setShowEmptyState(true);
+    
+    // Update artifacts for the new conversation
+    const updatedArtifacts = { ...artifacts, [newConversation.id]: [] };
+    setArtifacts(updatedArtifacts);
+    
+    // Save everything
+    localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
+    localStorage.setItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS, JSON.stringify(updatedArtifacts));
+    localStorage.setItem("ollama-chat-history", JSON.stringify([]));
+    
+    console.log("🔄 [NEW] Created new conversation:", newConversation.id);
+  }, [conversations, artifacts]);
 
+  // 🎯 FIXED: selectConversation function
   const selectConversation = useCallback((conversation) => {
-    setConversations(prev => prev.map(conv => ({ 
+    console.log("🔄 [SELECT] Selecting conversation:", conversation.id);
+    
+    // Save current conversation state if it exists
+    if (currentConversationId && messages.length > 0) {
+      saveConversations(conversations);
+    }
+    
+    // Update all conversations to set active state
+    const updatedConversations = conversations.map(conv => ({ 
       ...conv, 
       active: conv.id === conversation.id 
-    })));
+    }));
+    
+    setConversations(updatedConversations);
     setCurrentConversationId(conversation.id);
-    setMessages(conversation.messages || []);
+    
+    // Load messages for selected conversation
+    const conversationMessages = conversation.messages || [];
+    console.log("🔄 [SELECT] Loading messages:", conversationMessages.length);
+    setMessages(conversationMessages);
+    
+    // Update legacy storage for compatibility
+    localStorage.setItem("ollama-chat-history", JSON.stringify(conversationMessages));
+    
+    // Reset UI
     setImageFile(null);
     setImagePreview(null);
     setShowSidePanel(false);
     
-    if (conversation.messages && conversation.messages.length > 0) {
-      const hasArtifacts = artifacts[conversation.id] && artifacts[conversation.id].length > 0;
-      if (hasArtifacts) {
-        const savedPreference = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.SHOW_ARTIFACTS);
-        const shouldShow = savedPreference === null ? true : savedPreference === 'true';
-        setShowArtifacts(shouldShow);
-      } else {
-        setShowArtifacts(false);
-      }
+    // Check artifacts for this conversation
+    const conversationArtifacts = artifacts[conversation.id] || [];
+    console.log("🔄 [SELECT] Conversation artifacts:", conversationArtifacts.length);
+    
+    if (conversationArtifacts.length > 0) {
+      const savedPreference = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.SHOW_ARTIFACTS);
+      const shouldShow = savedPreference === null ? true : savedPreference === 'true';
+      setShowArtifacts(shouldShow);
+      setShowEmptyState(false);
+    } else {
+      setShowArtifacts(false);
+      setShowEmptyState(true);
     }
-  }, [artifacts]);
+    
+    // Save the updated conversations
+    localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
+    
+    console.log("🔄 [SELECT] Selection complete");
+  }, [conversations, currentConversationId, messages, artifacts, saveConversations]);
 
   const deleteConversation = useCallback((conversationId) => {
     if (!confirm("Delete this conversation?")) return;
@@ -1101,6 +1513,7 @@ export default function App() {
       setMessages([]);
       setImageFile(null);
       setImagePreview(null);
+      setShowEmptyState(true);
     }
     
     const updatedArtifacts = { ...artifacts };
@@ -1127,25 +1540,24 @@ export default function App() {
   const clearAllConversations = useCallback(() => {
     if (!confirm("Clear all conversations? This cannot be undone.")) return;
     
+    // Clear localStorage first
+    localStorage.removeItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS);
+    localStorage.removeItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS);
+    localStorage.removeItem("ollama-chat-history");
+    
+    // Reset all state
     setConversations([]);
     setMessages([]);
     setCurrentConversationId(null);
     setImageFile(null);
     setImagePreview(null);
+    setShowEmptyState(true);
     
     setArtifacts({});
-    saveArtifacts({});
+    saveArtifacts({}); // This will save the empty state
     
-    const newConversation = {
-      id: generateSafeId('conv'),
-      title: 'New Conversation',
-      messages: [],
-      lastUpdated: new Date().toISOString(),
-      active: true
-    };
-    
-    setConversations([newConversation]);
-    setCurrentConversationId(newConversation.id);
+    // Don't create a new conversation automatically
+    // The user can create one when they're ready
     setShowSidePanel(false);
     setShowArtifacts(false);
   }, [saveArtifacts]);
@@ -1180,6 +1592,7 @@ export default function App() {
               saveArtifacts(imported.artifacts);
             }
             setShowSidePanel(false);
+            setShowEmptyState(false);
           } catch { alert('Invalid file'); }
         };
         reader.readAsText(file);
@@ -1259,7 +1672,263 @@ export default function App() {
     return getEnhancedFileContext(currentArtifacts, input, currentEdits);
   }, [currentArtifacts, input, currentEdits, getEnhancedFileContext]);
 
-  // 🎯 FIXED STREAMING FUNCTION
+  // 🎯 CREATE NEW FILE FUNCTION - FIXED VERSION
+  const handleCreateNewFile = useCallback((folderPath = '') => {
+    const defaultExtensions = {
+      'src/components': '.jsx',
+      'src': '.js',
+      'styles': '.css',
+      'utils': '.js',
+      'public': '.html',
+      '': '.txt'
+    };
+    
+    let extension = '.txt';
+    for (const [path, ext] of Object.entries(defaultExtensions)) {
+      if (folderPath.includes(path) || (!folderPath && path === '')) {
+        extension = ext;
+        break;
+      }
+    }
+    
+    const newFileName = `${folderPath ? folderPath + '/' : ''}new-file-${Date.now()}${extension}`;
+    const language = getLanguageFromPath(newFileName);
+    
+    const defaultContent = {
+      'jsx': `// ${newFileName}
+import React from 'react';
+
+export default function NewComponent() {
+  return (
+    <div>
+      New Component
+    </div>
+  );
+}`,
+      'js': `// ${newFileName}
+function newFunction() {
+  console.log('Hello World');
+}`,
+      'css': `/* ${newFileName} */
+.new-class {
+  color: blue;
+}`,
+      'html': `<!-- ${newFileName} -->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>New File</title>
+</head>
+<body>
+  <h1>New File</h1>
+</body>
+</html>`,
+      'py': `# ${newFileName}
+def main():
+    print("Hello World")
+
+if __name__ == "__main__":
+    main()`,
+      'json': `{
+  "name": "new-file",
+  "version": "1.0.0"
+}`
+    }[language] || `// ${newFileName}\n// New file created`;
+
+    const newFile = {
+      path: newFileName,
+      content: defaultContent,
+      language: language,
+      id: generateSafeId(newFileName),
+      name: newFileName.split('/').pop(),
+      fullPath: newFileName,
+      type: 'file',
+      createdBy: 'user',
+      timestamp: new Date().toISOString()
+    };
+    
+    const updatedArtifacts = [...currentArtifacts, newFile];
+    handleArtifactUpdate(updatedArtifacts);
+    
+    // Set as selected and open for editing
+    setTimeout(() => {
+      setSelectedFile(newFile);
+      setEditedContent(newFile.content);
+      setIsEditing(true);
+      setViewMode('editor');
+      if (isMobile) setMobilePanel('editor');
+    }, 100);
+    
+    // Expand folder if created inside one
+    if (folderPath) {
+      setExpandedFolders(prev => new Set(prev).add(folderPath));
+    }
+    
+    // Close create menu
+    setShowCreateMenu(false);
+    setShowEmptyState(false);
+  }, [currentArtifacts, handleArtifactUpdate, isMobile]);
+
+  // 🎯 SELECTED FILE STATE (for ArtifactManager)
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedContent, setEditedContent] = useState('');
+  const [expandedFolders, setExpandedFolders] = useState(new Set());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [viewMode, setViewMode] = useState('editor');
+  const [mobilePanel, setMobilePanel] = useState('tree');
+
+  // 🎯 CREATE NEW FOLDER FUNCTION
+  const handleCreateNewFolder = useCallback((parentPath = '') => {
+    if (!newFolderName.trim()) {
+      setCreatingFolder(false);
+      setNewFolderName('');
+      return;
+    }
+    
+    const sanitizedName = newFolderName.trim().replace(/[<>:"/\\|?*]/g, '');
+    const folderPath = parentPath ? `${parentPath}/${sanitizedName}` : sanitizedName;
+    
+    // Create a dummy file inside the folder to represent it in the tree
+    const dummyFile = {
+      path: `${folderPath}/.keep`,
+      content: '# Folder placeholder',
+      language: 'text',
+      id: generateSafeId(folderPath),
+      name: '.keep',
+      fullPath: `${folderPath}/.keep`,
+      type: 'file',
+      createdBy: 'user',
+      isFolderPlaceholder: true
+    };
+    
+    const updatedArtifacts = [...currentArtifacts, dummyFile];
+    handleArtifactUpdate(updatedArtifacts);
+    
+    // Expand the parent folder
+    if (parentPath) {
+      setExpandedFolders(prev => new Set(prev).add(parentPath));
+    }
+    
+    // Reset state
+    setCreatingFolder(false);
+    setNewFolderName('');
+    setShowCreateMenu(false);
+    setShowEmptyState(false);
+  }, [currentArtifacts, handleArtifactUpdate, newFolderName]);
+
+  // 🎯 INITIAL LOAD - FIXED VERSION
+  useEffect(() => {
+    if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
+    
+    loadTimerRef.current = setTimeout(() => {
+      try {
+        console.log("🔄 [LOAD] Starting initial load...");
+        
+        // Load conversations FIRST
+        const savedConversations = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS);
+        console.log("🔄 [LOAD] Saved conversations found:", savedConversations ? "YES" : "NO");
+        
+        let loadedConversations = [];
+        if (savedConversations) {
+          try {
+            loadedConversations = JSON.parse(savedConversations);
+            console.log("🔄 [LOAD] Parsed conversations:", loadedConversations.length);
+          } catch (error) {
+            console.error("❌ [LOAD] Error parsing conversations:", error);
+            loadedConversations = [];
+          }
+        }
+        
+        // Load artifacts
+        const savedArtifacts = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS);
+        let loadedArtifacts = {};
+        if (savedArtifacts) {
+          try {
+            loadedArtifacts = JSON.parse(savedArtifacts);
+            console.log("🔄 [LOAD] Loaded artifacts for", Object.keys(loadedArtifacts).length, "conversations");
+          } catch (error) {
+            console.error("❌ [LOAD] Error parsing artifacts:", error);
+            loadedArtifacts = {};
+          }
+        }
+        
+        // If no conversations exist, create a default one
+        if (loadedConversations.length === 0) {
+          console.log("🔄 [LOAD] No conversations found, creating default...");
+          const newConvId = generateSafeId('conv');
+          const defaultConversation = {
+            id: newConvId,
+            title: 'New Conversation',
+            messages: [],
+            lastUpdated: new Date().toISOString(),
+            active: true,
+            artifactCount: 0
+          };
+          
+          loadedConversations = [defaultConversation];
+          loadedArtifacts[newConvId] = [];
+          
+          // Save the new default conversation
+          localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(loadedConversations));
+          localStorage.setItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS, JSON.stringify(loadedArtifacts));
+          
+          console.log("🔄 [LOAD] Created default conversation:", newConvId);
+        }
+        
+        // Set the active conversation (first active one or first in list)
+        const activeConv = loadedConversations.find(c => c.active) || loadedConversations[0];
+        const activeConvId = activeConv?.id;
+        
+        console.log("🔄 [LOAD] Setting active conversation:", activeConvId);
+        
+        // Set states
+        setConversations(loadedConversations);
+        setArtifacts(loadedArtifacts);
+        setCurrentConversationId(activeConvId);
+        
+        // Load messages for active conversation
+        if (activeConv && activeConv.messages) {
+          console.log("🔄 [LOAD] Loading messages for active conversation:", activeConv.messages.length);
+          setMessages(activeConv.messages);
+        }
+        
+        // Load other settings
+        const savedPrompt = localStorage.getItem("ollama-additional-system-prompt");
+        if (savedPrompt) setSystemPrompt(savedPrompt);
+        
+        const savedModel = localStorage.getItem("ollama-selected-model");
+        if (savedModel) setSelectedModel(savedModel);
+        
+        // Check if we should show artifacts
+        const conversationArtifacts = loadedArtifacts[activeConvId] || [];
+        if (conversationArtifacts.length > 0) {
+          const savedPreference = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.SHOW_ARTIFACTS);
+          const shouldShow = savedPreference === null ? true : savedPreference === 'true';
+          setShowArtifacts(shouldShow);
+          setShowEmptyState(false);
+        } else {
+          setShowArtifacts(false);
+          setShowEmptyState(true);
+        }
+        
+        console.log("🔄 [LOAD] Initial load complete");
+        setInitialLoadComplete(true);
+        
+      } catch (error) {
+        console.error("❌ [LOAD] Initial load error:", error);
+        // Create a fresh state on error
+        createNewConversation();
+        setInitialLoadComplete(true);
+      }
+    }, 50);
+    
+    return () => {
+      if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
+    };
+  }, []);
+  
+  // 🎯 FIXED STREAMING FUNCTION - WITH AUTOMATIC ARTIFACT ADDITION
   const sendMessage = useCallback(async () => {
     const trimmedInput = input.trim();
     if ((!trimmedInput && !imageFile) || isLoading) return;
@@ -1290,7 +1959,9 @@ export default function App() {
       timestamp: new Date().toISOString() 
     };
 
-    setMessages(prev => [...prev, userMessage, assistantMessage]);
+    // Create new messages array with both messages
+    const messagesWithNew = [...messages, userMessage, assistantMessage];
+    setMessages(messagesWithNew);
     setInput("");
     setOllamaError(null);
     setIsLoading(true);
@@ -1364,19 +2035,97 @@ export default function App() {
       updateMessageContent(fullContent);
 
       const parsedResponse = parseLLMResponse(fullContent);
+      
+      console.log("📦 [DEBUG] Parsed artifacts from AI:", parsedResponse.artifacts.length, "files");
+      console.log("📦 [DEBUG] Current artifacts before:", currentArtifacts.length);
+      
+      // CRITICAL FIX: Process artifacts BEFORE updating the message
       if (parsedResponse.artifacts.length > 0) {
-        handleArtifactUpdate([...currentArtifacts, ...parsedResponse.artifacts]);
-        if (!showArtifacts && parsedResponse.artifacts.length > 0) setShowArtifacts(true);
+        console.log("📦 [DEBUG] Processing artifacts...");
+        
+        // First, create enhanced artifacts with proper structure
+        const enhancedArtifacts = parsedResponse.artifacts.map(artifact => {
+          // Check if this artifact already exists in current artifacts
+          const isDuplicate = currentArtifacts.some(existing => 
+            existing.path === artifact.path || 
+            (existing.content && artifact.content && existing.content === artifact.content)
+          );
+          
+          if (isDuplicate) {
+            // Skip duplicates
+            console.log(`📦 [DEBUG] Skipping duplicate artifact: ${artifact.path}`);
+            return null;
+          }
+          
+          console.log(`📦 [DEBUG] Adding new artifact: ${artifact.path}`);
+          
+          return {
+            ...artifact,
+            id: generateSafeId(`file-${artifact.path}`),
+            type: 'file',
+            createdBy: 'ai',
+            timestamp: new Date().toISOString(),
+            addedToProject: true, // Mark as added
+            source: artifact.source || 'parsed'
+          };
+        }).filter(Boolean); // Remove null entries (duplicates)
+      
+        console.log("📦 [DEBUG] Enhanced artifacts to add:", enhancedArtifacts.length);
+      
+        // Add to current artifacts if we have any new files
+        if (enhancedArtifacts.length > 0) {
+          const updatedArtifacts = [...currentArtifacts, ...enhancedArtifacts];
+          console.log("📦 [DEBUG] Updated artifacts total will be:", updatedArtifacts.length);
+          console.log("📦 [DEBUG] First artifact:", enhancedArtifacts[0]?.path);
+          
+          // 🎯 CRITICAL: Call the update function
+          handleArtifactUpdate(updatedArtifacts);
+          
+          // Auto-show artifacts panel when files are generated
+          if (!showArtifacts && enhancedArtifacts.length > 0) {
+            console.log("📦 [DEBUG] Auto-showing artifacts panel");
+            setShowArtifacts(true);
+            localStorage.setItem(APP_CONFIG.STORAGE_KEYS.SHOW_ARTIFACTS, 'true');
+          }
+          
+          setShowEmptyState(false);
+          
+          // Update the parsedResponse to mark artifacts as added
+          parsedResponse.artifacts = enhancedArtifacts.map(art => ({
+            ...art,
+            addedToProject: true
+          }));
+        } else {
+          // No new artifacts were added (all were duplicates)
+          console.log("📦 [DEBUG] No new artifacts to add (all duplicates)");
+          parsedResponse.artifacts = parsedResponse.artifacts.map(artifact => ({
+            ...artifact,
+            addedToProject: false,
+            isDuplicate: true
+          }));
+        }
       }
-
-      setMessages(prev => prev.map(m => 
+      
+      console.log("📦 [DEBUG] Current conversation ID:", currentConversationId);
+      
+      // In the sendMessage function, after processing the response, add:
+      const finalMessages = messagesWithNew.map(m => 
         m.id === assistantMessage.id ? { 
           ...m, 
           content: parsedResponse.content, 
-          parsedResponse, 
+          parsedResponse: parsedResponse,
           isStreaming: false 
         } : m
-      ));
+      );
+      
+      setMessages(finalMessages);
+      
+      // 🚨 CRITICAL: Save the conversation after message is complete
+      setTimeout(() => {
+        console.log("💾 [SEND] Saving conversation after message completion");
+        saveConversations(conversations, true); // Force save
+      }, 100);
+      
     } catch (err) {
       if (err.name === "AbortError") { 
         setMessages(prev => prev.slice(0, -1)); 
@@ -1400,7 +2149,7 @@ export default function App() {
       if (fileInputRef.current) fileInputRef.current.value = '';
       setTimeout(() => textareaRef.current?.focus(), 100);
     }
-  }, [input, isLoading, messages, selectedModel, systemPrompt, imageFile, imagePreview, currentConversationId, conversations, createNewConversation, showArtifacts, currentArtifacts, handleArtifactUpdate, getFileContext, parseLLMResponse]);
+  }, [input, isLoading, messages, selectedModel, systemPrompt, imageFile, imagePreview, currentConversationId, conversations, createNewConversation, showArtifacts, currentArtifacts, handleArtifactUpdate, getFileContext, parseLLMResponse, saveConversations]);
 
   const handleKeyDown = useCallback((e) => { 
     if (e.key === "Enter" && e.ctrlKey) { 
@@ -1428,6 +2177,7 @@ export default function App() {
       localStorage.setItem(APP_CONFIG.STORAGE_KEYS.SHOW_ARTIFACTS, newValue.toString());
       return newValue;
     });
+    setShowEmptyState(false);
   }, []);
 
   const handleViewEdit = useCallback((edit) => {
@@ -1587,39 +2337,115 @@ export default function App() {
                   <div className="artifacts-title">
                     <FileText size={16} />
                     <span>Generated Files ({parsedResponse.artifacts.length})</span>
+                    {parsedResponse.artifacts.some(a => a.addedToProject) && (
+                      <span className="added-badge">
+                        <Check size={14} />
+                        {parsedResponse.artifacts.filter(a => a.addedToProject).length} added to project
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="artifacts-list">
-                  {parsedResponse.artifacts.slice(0, 3).map((artifact) => (
-                    <div key={artifact.id} className="artifact-item">
-                      <div className="artifact-header">
-                        <div className="artifact-info">
-                          <div className="file-icon"><FileText size={14} /></div>
-                          <div className="file-details">
-                            <span className="file-name">{artifact.path}</span>
-                            <span className="file-language">{artifact.language}</span>
+                  {parsedResponse.artifacts.slice(0, 5).map((artifact) => {
+                    // Check if already in project
+                    const isInProject = artifact.addedToProject || currentArtifacts.some(a => 
+                      a.path === artifact.path || 
+                      (a.content && artifact.content && a.content === artifact.content)
+                    );
+                    
+                    return (
+                      <div key={artifact.id} className={`artifact-item ${isInProject ? 'added' : ''}`}>
+                        <div className="artifact-header">
+                          <div className="artifact-info">
+                            <div className="file-icon">
+                              {isInProject ? <Check size={14} className="added-icon" /> : <FileText size={14} />}
+                            </div>
+                            <div className="file-details">
+                              <span className="file-name">{artifact.path}</span>
+                              <div className="file-meta">
+                                <span className="file-language">{artifact.language}</span>
+                                <span className="file-size">
+                                  {artifact.lineCount} lines • {formatBytes(artifact.size || artifact.content.length)}
+                                </span>
+                              </div>
+                              {isInProject && (
+                                <span className="file-status-badge">
+                                  <Check size={10} />
+                                  In Project
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="artifact-actions">
+                            {!isInProject ? (
+                              <button 
+                                onClick={() => {
+                                  const enhancedArtifact = {
+                                    ...artifact,
+                                    id: generateSafeId(`file-${artifact.path}`),
+                                    type: 'file',
+                                    createdBy: 'ai',
+                                    timestamp: new Date().toISOString(),
+                                    addedToProject: true
+                                  };
+                                  handleArtifactUpdate([...currentArtifacts, enhancedArtifact]);
+                                  setShowArtifacts(true);
+                                  setShowEmptyState(false);
+                                  
+                                  // Update the artifact in the message to show it's added
+                                  artifact.addedToProject = true;
+                                  
+                                  // Force re-render
+                                  setTimeout(() => {
+                                    setMessages(prev => prev.map(msg => 
+                                      msg.id === message.id ? {
+                                        ...msg,
+                                        parsedResponse: {
+                                          ...msg.parsedResponse,
+                                          artifacts: msg.parsedResponse?.artifacts?.map(art => 
+                                            art.path === artifact.path ? { ...art, addedToProject: true } : art
+                                          ) || []
+                                        }
+                                      } : msg
+                                    ));
+                                  }, 50);
+                                }}
+                                className="add-to-project-btn"
+                                title="Add to project"
+                              >
+                                <Plus size={14} />
+                                Add
+                              </button>
+                            ) : (
+                              <span className="added-check" title="Already in project">
+                                <Check size={14} />
+                                Added
+                              </span>
+                            )}
+                            <button 
+                              onClick={() => navigator.clipboard.writeText(artifact.content)}
+                              className="copy-artifact-btn"
+                              title="Copy code"
+                            >
+                              <Copy size={14} />
+                              Copy
+                            </button>
                           </div>
                         </div>
-                        <div className="artifact-actions">
-                          <button 
-                            onClick={() => handleArtifactUpdate([...currentArtifacts, artifact])}
-                            className="add-to-project-btn"
-                            title="Add to project"
-                          >
-                            <Plus size={14} />
-                          </button>
-                          <button 
-                            onClick={() => navigator.clipboard.writeText(artifact.content)}
-                            className="copy-artifact-btn"
-                            title="Copy code"
-                          >
-                            <Copy size={14} />
-                          </button>
-                        </div>
+                        {!isInProject && (
+                          <div className="artifact-notice">
+                            <small>Click "Add" to include this file in your project</small>
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
+                {parsedResponse.artifacts.length > 5 && (
+                  <div className="artifacts-footer">
+                    <small>... and {parsedResponse.artifacts.length - 5} more files</small>
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -1629,6 +2455,116 @@ export default function App() {
       </div>
     );
   }, [handleArtifactUpdate, currentArtifacts, handleViewEdit]);
+
+  // 🎯 EMPTY ARTIFACTS PLACEHOLDER COMPONENT
+  const EmptyArtifactsPlaceholder = React.memo(() => {
+    return (
+      <div className="empty-artifacts-placeholder">
+        <div className="empty-artifacts-icon">
+          <FileCode size={48} />
+        </div>
+        <h3>No Project Files Yet</h3>
+        <p>Start by creating your first file or ask the AI to generate code</p>
+        <div className="empty-actions">
+          <button 
+            onClick={() => handleCreateNewFile()}
+            className="create-first-file-btn"
+          >
+            <FilePlus size={16} />
+            Create First File
+          </button>
+          <button 
+            onClick={() => {
+              setInput("Create a new project with basic structure");
+              textareaRef.current?.focus();
+            }}
+            className="ask-ai-btn"
+          >
+            <Bot size={16} />
+            Ask AI to Start Project
+          </button>
+        </div>
+      </div>
+    );
+  });
+
+  // 🎯 CREATE MENU COMPONENT
+  const CreateMenu = React.memo(({ onClose }) => {
+    const menuRef = useRef(null);
+
+    useEffect(() => {
+      const handleClickOutside = (event) => {
+        if (menuRef.current && !menuRef.current.contains(event.target)) {
+          onClose();
+        }
+      };
+      
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [onClose]);
+
+    return (
+      <div className="create-menu" ref={menuRef}>
+        <button 
+          className="create-menu-item"
+          onClick={() => {
+            handleCreateNewFile();
+            onClose();
+          }}
+        >
+          <FilePlus size={16} />
+          <span>New File</span>
+        </button>
+        <button 
+          className="create-menu-item"
+          onClick={() => {
+            setCreatingFolder(true);
+            onClose();
+          }}
+        >
+          <FolderPlus size={16} />
+          <span>New Folder</span>
+        </button>
+      </div>
+    );
+  });
+
+  // 🎯 FOLDER CREATION INPUT
+  const FolderCreationInput = React.memo(() => {
+    const handleSubmit = (e) => {
+      e.preventDefault();
+      handleCreateNewFolder();
+    };
+
+    const handleCancel = () => {
+      setCreatingFolder(false);
+      setNewFolderName('');
+    };
+
+    return (
+      <div className="folder-creation-input">
+        <form onSubmit={handleSubmit}>
+          <input
+            ref={folderInputRef}
+            type="text"
+            value={newFolderName}
+            onChange={(e) => setNewFolderName(e.target.value)}
+            placeholder="Folder name"
+            className="folder-input"
+            autoFocus
+          />
+          <div className="folder-input-actions">
+            <button type="submit" className="folder-input-btn primary">
+              Create
+            </button>
+            <button type="button" className="folder-input-btn" onClick={handleCancel}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  });
 
   // 🎯 CHILD COMPONENTS
   const SystemPromptInput = React.memo(({ isVisible, onClose }) => {
@@ -1726,32 +2662,40 @@ export default function App() {
   const ModelDropdown = React.memo(() => {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef(null);
-
-    const closeDropdown = useCallback(() => { setIsOpen(false); setShowUnrecommended(false); }, [setShowUnrecommended]);
-
+    const [internalShowUnrecommended, setInternalShowUnrecommended] = useState(false);
+  
+    // Use a local state to avoid triggering parent re-render
+    const closeDropdown = useCallback(() => { 
+      setIsOpen(false); 
+      setInternalShowUnrecommended(false);
+    }, []);
+  
     useEffect(() => {
       const handleClickOutside = (e) => {
-        if (dropdownRef.current && !dropdownRef.current.contains(e.target)) closeDropdown();
+        if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+          closeDropdown();
+        }
       };
+      
       if (isOpen) {
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
       }
     }, [isOpen, closeDropdown]);
-
-    // safely derive display name
-    const displayName =
+  
+    const displayName = 
       typeof selectedModel === "string" && selectedModel
         ? selectedModel.split(":")[0]
         : "Select model";
-    
+  
     return (
       <div className="model-dropdown-wrapper" ref={dropdownRef}>
         <button
           className={`model-dropdown-trigger ${isOpen ? "open" : ""}`}
           onClick={() => {
-            // just open/close; don't touch model here
-            if (!isLoadingModels) setIsOpen(prev => !prev);
+            if (!isLoadingModels) {
+              setIsOpen(prev => !prev);
+            }
           }}
           disabled={isLoadingModels}
           aria-label={
@@ -1765,7 +2709,7 @@ export default function App() {
             <ChevronDown size={14} className="dropdown-chevron" />
           </div>
         </button>
-    
+  
         <AnimatePresence>
           {isOpen && (
             <motion.div
@@ -1773,6 +2717,7 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.95, y: -8 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: -8 }}
+              onMouseDown={(e) => e.preventDefault()}
             >
               {models.cloud.length > 0 && (
                 <div className="model-section">
@@ -1784,10 +2729,12 @@ export default function App() {
                         selectedModel === model ? "selected" : ""
                       }`}
                       onClick={() => {
-                        setSelectedModel(model);      // model is a string
-                        saveSelectedModel(model);     // persist as string
-                        closeDropdown();
+                        setSelectedModel(model);
+                        saveSelectedModel(model);
+                        setIsOpen(false);
+                        setInternalShowUnrecommended(false);
                       }}
+                      onMouseDown={(e) => e.preventDefault()}
                     >
                       <span className="model-item-text">{model}</span>
                       {selectedModel === model && (
@@ -1797,34 +2744,39 @@ export default function App() {
                   ))}
                 </div>
               )}
-    
+  
               {models.nonCloud.length > 0 && (
                 <div className="model-section">
                   <button
                     className="model-menu-group"
                     onClick={(e) => {
+                      e.preventDefault();
                       e.stopPropagation();
-                      setShowUnrecommended((prev) => !prev);
+                      setInternalShowUnrecommended((prev) => !prev);
                     }}
+                    onMouseDown={(e) => e.preventDefault()}
                   >
                     <span>Other Models</span>
                     <span className="group-arrow">
-                      {showUnrecommended ? "−" : "+"}
+                      {internalShowUnrecommended ? "−" : "+"}
                     </span>
                   </button>
-    
-                  {showUnrecommended &&
+  
+                  {internalShowUnrecommended &&
                     models.nonCloud.slice(0, 10).map((model) => (
                       <button
                         key={`model-noncloud-${model}`}
                         className={`model-menu-item model-menu-item-unrecommended ${
                           selectedModel === model ? "selected" : ""
                         }`}
-                        onClick={() => {
-                          setSelectedModel(model);    // model is a string
-                          saveSelectedModel(model);   // persist as string
-                          closeDropdown();
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setSelectedModel(model);
+                          saveSelectedModel(model);
+                          setIsOpen(false);
+                          setInternalShowUnrecommended(false);
                         }}
+                        onMouseDown={(e) => e.preventDefault()}
                       >
                         <span className="model-item-text">{model}</span>
                         {selectedModel === model && (
@@ -1834,7 +2786,7 @@ export default function App() {
                     ))}
                 </div>
               )}
-    
+  
               {models.cloud.length === 0 && models.nonCloud.length === 0 && (
                 <div className="model-empty-state">
                   <div className="model-empty-icon">🤖</div>
@@ -1853,150 +2805,264 @@ export default function App() {
     const [backups, setBackups] = useState([]);
     const [activeTab, setActiveTab] = useState('overview');
     const [restoring, setRestoring] = useState(false);
-
+    const [showImportDialog, setShowImportDialog] = useState(false);
+    const [importFile, setImportFile] = useState(null);
+  
+    const loadBackups = useCallback(() => {
+      try {
+        const backupKeys = Object.keys(localStorage)
+          .filter(key => key.startsWith(APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX))
+          .sort()
+          .reverse()
+          .slice(0, 20);
+        
+        const backupList = backupKeys.map(key => {
+          const data = localStorage.getItem(key);
+          let backupData = null;
+          let conversationCount = 0;
+          let artifactCount = 0;
+          let totalSize = 0;
+          let version = '1.0';
+          let isValid = false;
+          
+          try {
+            backupData = JSON.parse(data);
+            
+            if (backupData && backupData.type === 'complete-backup') {
+              // New format with conversations and artifacts
+              version = backupData.version || '3.0';
+              conversationCount = backupData.conversations?.length || 0;
+              artifactCount = backupData.metadata?.totalFiles || 0;
+              isValid = true;
+            } else if (backupData && typeof backupData === 'object') {
+              // Old format - just artifacts
+              version = '1.0';
+              conversationCount = Object.keys(backupData).length;
+              artifactCount = Object.values(backupData).reduce((sum, files) => sum + files.length, 0);
+              isValid = true;
+            }
+            
+            totalSize = new Blob([data]).size;
+          } catch (e) {
+            console.warn('Invalid backup data:', key, e);
+          }
+          
+          return {
+            key,
+            timestamp: parseInt(key.replace(APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX, '')),
+            backupData,
+            conversationCount,
+            artifactCount,
+            totalSize,
+            version,
+            isValid,
+            date: new Date(parseInt(key.replace(APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX, '')))
+          };
+        }).filter(backup => backup.isValid);
+        
+        console.log("📦 [BACKUP] Loaded backups:", backupList.length);
+        setBackups(backupList);
+      } catch (error) {
+        console.error('Error loading backups:', error);
+        setBackups([]);
+      }
+    }, []);
+  
     useEffect(() => {
       if (showStorageManagement) {
         const timer = setTimeout(() => {
           setStorageInfo(getStorageInfo());
-          
-          try {
-            const backupKeys = Object.keys(localStorage)
-              .filter(key => key.startsWith(APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX))
-              .sort()
-              .reverse()
-              .slice(0, 20);
-            
-            const backupList = backupKeys.map(key => {
-              const data = localStorage.getItem(key);
-              let artifactCount = 0;
-              let totalSize = 0;
-              let conversationCount = 0;
-              
-              try {
-                const parsed = JSON.parse(data);
-                conversationCount = Object.keys(parsed).length;
-                artifactCount = Object.values(parsed).reduce((sum, files) => sum + files.length, 0);
-                totalSize = new Blob([data]).size;
-              } catch (e) {
-                console.warn('Invalid backup data:', key);
-              }
-              
-              return {
-                key,
-                timestamp: parseInt(key.replace(APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX, '')),
-                artifactCount,
-                conversationCount,
-                totalSize,
-                date: new Date(parseInt(key.replace(APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX, '')))
-              };
-            });
-            
-            setBackups(backupList);
-          } catch (error) {
-            console.error('Error loading backups:', error);
-            setBackups([]);
-          }
+          loadBackups();
         }, 50);
         
         return () => clearTimeout(timer);
       }
-    }, [showStorageManagement, getStorageInfo]);
-
+    }, [showStorageManagement, getStorageInfo, loadBackups]);
+  
     const handleExportCurrent = useCallback(() => {
       if (currentConversationId) {
         const conversationArtifacts = currentArtifacts;
+        const currentConv = conversations.find(c => c.id === currentConversationId);
         
         const exportData = {
-          version: '2.0',
-          type: 'ollama-project',
+          version: '3.0',
+          type: 'complete-backup',
+          timestamp: Date.now(),
           exportedAt: new Date().toISOString(),
           conversationId: currentConversationId,
-          artifacts: conversationArtifacts,
+          conversation: currentConv,
+          artifacts: { [currentConversationId]: conversationArtifacts },
           fileCount: conversationArtifacts.length,
           totalSize: JSON.stringify(conversationArtifacts).length,
           metadata: {
             app: 'Ollama Chat',
-            version: '2.0'
+            version: '3.0'
           }
         };
-
+  
         const blob = new Blob([JSON.stringify(exportData, null, 2)], { 
           type: 'application/json' 
         });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `ollama-project-${currentConversationId}-${new Date().toISOString().split('T')[0]}.json`;
+        a.download = `ollama-backup-${currentConversationId}-${new Date().toISOString().split('T')[0]}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+        
+        alert(`Exported conversation "${currentConv?.title || 'Untitled'}" with ${conversationArtifacts.length} files`);
       }
-    }, [currentConversationId, currentArtifacts]);
-
-    const handleImportToCurrent = useCallback((file) => {
-      if (currentConversationId) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          try {
-            const imported = JSON.parse(event.target.result);
-            
-            if (!imported.artifacts || !Array.isArray(imported.artifacts)) {
-              alert('Invalid project file: missing artifacts array');
-              return;
-            }
-            
-            if (imported.type !== 'ollama-project') {
-              alert('Invalid file format: not an Ollama project export');
-              return;
-            }
-            
-            handleArtifactUpdate(imported.artifacts);
-            alert('Project imported successfully!');
-            setShowStorageManagement(false);
-          } catch (error) {
-            alert('Import failed: ' + error.message);
-          }
-        };
-        reader.onerror = () => alert('Failed to read file');
-        reader.readAsText(file);
+    }, [currentConversationId, currentArtifacts, conversations]);
+  
+    const handleExportAll = useCallback(() => {
+      const exportData = {
+        version: '3.0',
+        type: 'complete-backup',
+        timestamp: Date.now(),
+        exportedAt: new Date().toISOString(),
+        conversations: conversations,
+        artifacts: artifacts,
+        metadata: {
+          conversationCount: conversations.length,
+          totalFiles: Object.values(artifacts).reduce((sum, files) => sum + files.length, 0),
+          app: 'Ollama Chat',
+          version: '3.0'
+        }
+      };
+  
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { 
+        type: 'application/json' 
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ollama-complete-backup-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      alert(`Exported ${conversations.length} conversations with ${Object.values(artifacts).reduce((sum, files) => sum + files.length, 0)} total files`);
+    }, [conversations, artifacts]);
+  
+    const handleRestoreBackup = useCallback(async (backup) => {
+      if (!backup.isValid) {
+        alert('Invalid backup format');
+        return;
       }
-    }, [currentConversationId, handleArtifactUpdate]);
-
-    const handleRestoreBackup = useCallback(async (backupKey) => {
+      
+      if (!confirm(`Are you sure you want to restore this backup?\n\nThis will replace ALL current conversations and artifacts.`)) {
+        return;
+      }
+      
       setRestoring(true);
+      
       try {
-        const backupData = localStorage.getItem(backupKey);
-        if (!backupData) {
-          throw new Error('Backup not found');
+        console.log("🔄 [RESTORE] Starting backup restoration:", backup.key);
+        
+        if (backup.version === '3.0' && backup.backupData.type === 'complete-backup') {
+          // New format - restore conversations AND artifacts
+          const { conversations: backupConversations, artifacts: backupArtifacts } = backup.backupData;
+          
+          if (backupConversations && Array.isArray(backupConversations)) {
+            console.log("🔄 [RESTORE] Restoring conversations:", backupConversations.length);
+            setConversations(backupConversations);
+            localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(backupConversations));
+            
+            // Set the first conversation as active
+            if (backupConversations.length > 0) {
+              const activeConv = backupConversations.find(c => c.active) || backupConversations[0];
+              setCurrentConversationId(activeConv.id);
+              setMessages(activeConv.messages || []);
+              localStorage.setItem("ollama-chat-history", JSON.stringify(activeConv.messages || []));
+            }
+          }
+          
+          if (backupArtifacts && typeof backupArtifacts === 'object') {
+            console.log("🔄 [RESTORE] Restoring artifacts:", Object.keys(backupArtifacts).length, "conversations");
+            const fixedArtifacts = fixCorruptedArtifacts(backupArtifacts);
+            setArtifacts(fixedArtifacts);
+            saveArtifacts(fixedArtifacts);
+          }
+        } else {
+          // Old format - just artifacts
+          console.log("🔄 [RESTORE] Restoring old format backup");
+          const fixedArtifacts = fixCorruptedArtifacts(backup.backupData);
+          setArtifacts(fixedArtifacts);
+          saveArtifacts(fixedArtifacts);
         }
         
-        const importedArtifacts = JSON.parse(backupData);
-        setArtifacts(importedArtifacts);
-        saveArtifacts(importedArtifacts);
+        // Reload backups list
+        setTimeout(() => {
+          loadBackups();
+          setStorageInfo(getStorageInfo());
+          setRestoring(false);
+          alert(`✅ Backup restored successfully!\n\nRestored ${backup.conversationCount} conversations with ${backup.artifactCount} files.`);
+          setShowStorageManagement(false);
+        }, 500);
         
-        setStorageInfo(getStorageInfo());
-        setBackups(prev => prev.map(b => ({ ...b })));
-        alert('Backup restored successfully!');
       } catch (error) {
-        alert('Restore failed: ' + error.message);
-      } finally {
+        console.error('❌ [RESTORE] Restoration failed:', error);
+        alert(`Restoration failed: ${error.message}`);
         setRestoring(false);
       }
-    }, [saveArtifacts]);
-
+    }, [saveArtifacts, getStorageInfo, loadBackups]);
+  
+    const handleImportBackup = useCallback((file) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const importedData = JSON.parse(event.target.result);
+          
+          if (!importedData.type || importedData.type !== 'complete-backup') {
+            alert('Invalid backup file format. Please use an exported backup file.');
+            return;
+          }
+          
+          // Validate the backup
+          if (!importedData.conversations || !Array.isArray(importedData.conversations)) {
+            alert('Invalid backup: missing conversations data');
+            return;
+          }
+          
+          if (!importedData.artifacts || typeof importedData.artifacts !== 'object') {
+            alert('Invalid backup: missing artifacts data');
+            return;
+          }
+          
+          // Store as a new backup
+          const backupKey = `${APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX}${Date.now()}`;
+          localStorage.setItem(backupKey, JSON.stringify(importedData));
+          
+          // Reload backups list
+          loadBackups();
+          setImportFile(null);
+          setShowImportDialog(false);
+          
+          alert(`✅ Backup imported successfully!\n\nYou can now restore it from the backups list.`);
+        } catch (error) {
+          alert('Import failed: ' + error.message);
+        }
+      };
+      reader.onerror = () => alert('Failed to read file');
+      reader.readAsText(file);
+    }, [loadBackups]);
+  
     const handleDeleteBackup = useCallback((backupKey) => {
       if (!confirm('Are you sure you want to delete this backup? This action cannot be undone.')) return;
       
       try {
         localStorage.removeItem(backupKey);
-        setBackups(prev => prev.filter(b => b.key !== backupKey));
+        loadBackups();
         setStorageInfo(getStorageInfo());
+        alert('Backup deleted successfully');
       } catch (error) {
         alert('Failed to delete backup: ' + error.message);
       }
-    }, [getStorageInfo]);
-
+    }, [getStorageInfo, loadBackups]);
+  
     const handleCleanupBackups = useCallback(() => {
       try {
         const backupKeys = Object.keys(localStorage)
@@ -2005,20 +3071,76 @@ export default function App() {
           .reverse();
         
         if (backupKeys.length > APP_CONFIG.LIMITS.MAX_BACKUPS) {
-          backupKeys.slice(APP_CONFIG.LIMITS.MAX_BACKUPS).forEach(key => {
+          const toDelete = backupKeys.slice(APP_CONFIG.LIMITS.MAX_BACKUPS);
+          toDelete.forEach(key => {
             localStorage.removeItem(key);
           });
+          alert(`Removed ${toDelete.length} old backups`);
+        } else {
+          alert('No old backups to clean up');
         }
         
-        setBackups(prev => prev.slice(0, APP_CONFIG.LIMITS.MAX_BACKUPS));
+        loadBackups();
         setStorageInfo(getStorageInfo());
       } catch (error) {
         console.warn('Error cleaning up backups:', error);
+        alert('Error cleaning up backups');
       }
-    }, [getStorageInfo]);
-
+    }, [getStorageInfo, loadBackups]);
+  
+    const ImportDialog = () => (
+      <div className="import-dialog">
+        <div className="import-dialog-content">
+          <h3>Import Backup File</h3>
+          <p>Select a backup file (.json) to import</p>
+          <div className="import-dropzone">
+            <input
+              type="file"
+              accept=".json"
+              onChange={(e) => setImportFile(e.target.files[0])}
+              className="import-file-input"
+              id="import-file"
+            />
+            <label htmlFor="import-file" className="import-dropzone-label">
+              {importFile ? (
+                <div className="import-file-info">
+                  <FileText size={24} />
+                  <span>{importFile.name}</span>
+                  <small>{formatBytes(importFile.size)}</small>
+                </div>
+              ) : (
+                <>
+                  <Upload size={24} />
+                  <span>Click to select backup file</span>
+                  <small>.json format only</small>
+                </>
+              )}
+            </label>
+          </div>
+          <div className="import-dialog-actions">
+            <button
+              onClick={() => {
+                setImportFile(null);
+                setShowImportDialog(false);
+              }}
+              className="import-btn secondary"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => importFile && handleImportBackup(importFile)}
+              disabled={!importFile}
+              className="import-btn primary"
+            >
+              Import Backup
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  
     if (!showStorageManagement) return null;
-
+  
     return (
       <div className="storage-management-modal">
         <div className="modal-overlay" onClick={() => setShowStorageManagement(false)}></div>
@@ -2029,7 +3151,7 @@ export default function App() {
               <X size={20} />
             </button>
           </div>
-
+  
           <div className="storage-tabs">
             <button 
               className={`storage-tab ${activeTab === 'overview' ? 'active' : ''}`}
@@ -2046,7 +3168,7 @@ export default function App() {
               Backups ({backups.length})
             </button>
           </div>
-
+  
           <div className="storage-content">
             {activeTab === 'overview' && (
               <>
@@ -2071,7 +3193,7 @@ export default function App() {
                         <span className="stat-percentage">{storageInfo.storageUsage.toFixed(1)}% of limit</span>
                       </div>
                     </div>
-
+  
                     <div className="stats-grid">
                       <div className="stat-card">
                         <FileText size={16} />
@@ -2097,10 +3219,10 @@ export default function App() {
                     </div>
                   </div>
                 )}
-
+  
                 <div className="storage-actions">
                   <div className="action-section">
-                    <h3>Current Project</h3>
+                    <h3>Export Data</h3>
                     <div className="action-buttons">
                       <button 
                         onClick={handleExportCurrent} 
@@ -2110,19 +3232,30 @@ export default function App() {
                         <Download size={16} />
                         Export Current Project
                       </button>
-                      <label className="action-button secondary">
-                        <Upload size={16} />
-                        Import to Current Project
-                        <input 
-                          type="file" 
-                          accept=".json" 
-                          onChange={(e) => e.target.files[0] && handleImportToCurrent(e.target.files[0])}
-                          style={{ display: 'none' }}
-                        />
-                      </label>
+                      <button 
+                        onClick={handleExportAll} 
+                        className="action-button secondary"
+                        disabled={conversations.length === 0}
+                      >
+                        <Download size={16} />
+                        Export All Data
+                      </button>
                     </div>
                   </div>
-
+  
+                  <div className="action-section">
+                    <h3>Import & Restore</h3>
+                    <div className="action-buttons">
+                      <button 
+                        onClick={() => setShowImportDialog(true)}
+                        className="action-button"
+                      >
+                        <Upload size={16} />
+                        Import Backup File
+                      </button>
+                    </div>
+                  </div>
+  
                   <div className="action-section">
                     <h3>Storage Maintenance</h3>
                     <div className="action-buttons">
@@ -2133,33 +3266,10 @@ export default function App() {
                         <Trash2 size={16} />
                         Clean Up Old Backups
                       </button>
-                      <button 
-                        onClick={() => {
-                          const compressed = Object.keys(artifacts).reduce((acc, key) => {
-                            if (artifacts[key] && artifacts[key].length > 0) {
-                              acc[key] = artifacts[key]
-                                .filter(artifact => artifact.content && artifact.content.trim())
-                                .map(artifact => ({
-                                  ...artifact,
-                                  content: artifact.content.length > 10000 ? 
-                                    artifact.content.substring(0, 10000) + '\n// ... (truncated due to size)' : 
-                                    artifact.content
-                                }));
-                            }
-                            return acc;
-                          }, {});
-                          saveArtifacts(compressed);
-                          setStorageInfo(getStorageInfo());
-                        }} 
-                        className="action-button"
-                      >
-                        <Archive size={16} />
-                        Compress Storage
-                      </button>
                     </div>
                   </div>
                 </div>
-
+  
                 {storageInfo?.isNearLimit && (
                   <div className="storage-warning">
                     <Shield size={16} />
@@ -2171,19 +3281,28 @@ export default function App() {
                 )}
               </>
             )}
-
+  
             {activeTab === 'backups' && (
               <div className="backups-section">
                 <div className="backups-header">
-                  <h3>Available Backups</h3>
-                  <button 
-                    onClick={handleCleanupBackups}
-                    className="cleanup-backups-btn"
-                    disabled={backups.length <= 1}
-                  >
-                    <Trash2 size={14} />
-                    Keep Latest Only
-                  </button>
+                  <h3>Available Backups ({backups.length})</h3>
+                  <div className="backups-header-actions">
+                    <button 
+                      onClick={handleCleanupBackups}
+                      className="cleanup-backups-btn"
+                      disabled={backups.length <= 1}
+                    >
+                      <Trash2 size={14} />
+                      Keep Latest Only
+                    </button>
+                    <button 
+                      onClick={() => setShowImportDialog(true)}
+                      className="cleanup-backups-btn secondary"
+                    >
+                      <Upload size={14} />
+                      Import Backup
+                    </button>
+                  </div>
                 </div>
                 
                 {backups.length === 0 ? (
@@ -2191,6 +3310,13 @@ export default function App() {
                     <Clock size={32} />
                     <p>No backups available</p>
                     <small>Backups are created automatically when you save changes</small>
+                    <button 
+                      onClick={() => setShowImportDialog(true)}
+                      className="import-first-btn"
+                    >
+                      <Upload size={16} />
+                      Import First Backup
+                    </button>
                   </div>
                 ) : (
                   <div className="backups-list">
@@ -2199,16 +3325,17 @@ export default function App() {
                         <div className="backup-info">
                           <div className="backup-header">
                             <span className="backup-date">{formatDate(backup.date)}</span>
+                            <span className="backup-version">v{backup.version}</span>
                             {index === 0 && <span className="backup-latest-tag">Latest</span>}
                           </div>
                           <div className="backup-details">
                             <span className="backup-detail">
-                              <FileText size={12} />
-                              {backup.artifactCount} files
+                              <History size={12} />
+                              {backup.conversationCount} conversations
                             </span>
                             <span className="backup-detail">
-                              <Folder size={12} />
-                              {backup.conversationCount} projects
+                              <FileText size={12} />
+                              {backup.artifactCount} files
                             </span>
                             <span className="backup-detail">
                               <HardDrive size={12} />
@@ -2218,12 +3345,12 @@ export default function App() {
                         </div>
                         <div className="backup-actions">
                           <button
-                            onClick={() => handleRestoreBackup(backup.key)}
+                            onClick={() => handleRestoreBackup(backup)}
                             className="backup-action-btn primary"
-                            disabled={restoring || index === 0}
+                            disabled={restoring}
                             title="Restore this backup"
                           >
-                            <RotateCcw size={14} />
+                            {restoring ? 'Restoring...' : <RotateCcw size={14} />}
                           </button>
                           <button
                             onClick={() => handleDeleteBackup(backup.key)}
@@ -2236,7 +3363,7 @@ export default function App() {
                         </div>
                       </div>
                     ))}
-                </div>
+                  </div>
                 )}
                 
                 <div className="backups-info">
@@ -2244,12 +3371,17 @@ export default function App() {
                   <div className="backups-info-content">
                     <strong>Backup System</strong>
                     <p>Automatic backups are created when you save changes. The system keeps up to {APP_CONFIG.LIMITS.MAX_BACKUPS} backups.</p>
+                    <p style={{ marginTop: '8px', fontSize: '12px' }}>
+                      <strong>Note:</strong> Restoring a backup will replace ALL current data. Make sure to export your current data first if needed.
+                    </p>
                   </div>
                 </div>
               </div>
             )}
           </div>
         </div>
+        
+        {showImportDialog && <ImportDialog />}
       </div>
     );
   });
@@ -2319,21 +3451,29 @@ export default function App() {
                     <p className="empty-state-text">No conversations yet</p>
                   </div>
                 ) : (
-                  conversations.slice(0, 20).map((conv) => (
-                    <div key={`conversation-${conv.id}`} className={`conversation-item ${conv.active ? 'active' : ''}`} onClick={() => selectConversation(conv)} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && selectConversation(conv)}>
-                      <div className="conversation-icon"><History size={14} /></div>
-                      <div className="conversation-content">
-                        <div className="conversation-title">{conv.title || 'New Conversation'}</div>
-                        <div className="conversation-preview">{formatPreview(conv.messages)}</div>
-                        <div className="conversation-date">{formatDateShort(conv.lastUpdated)}</div>
+                  conversations.slice(0, 20).map((conv) => {
+                    // Generate a title from messages if not set
+                    const conversationTitle = conv.title || 
+                      (conv.messages?.length > 0 
+                        ? (conv.messages[0]?.content?.substring(0, 50) + (conv.messages[0]?.content?.length > 50 ? '...' : ''))
+                        : 'New Conversation');
+                    
+                    return (
+                      <div key={`conversation-${conv.id}`} className={`conversation-item ${conv.active ? 'active' : ''}`} onClick={() => selectConversation(conv)} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && selectConversation(conv)}>
+                        <div className="conversation-icon"><History size={14} /></div>
+                        <div className="conversation-content">
+                          <div className="conversation-title">{conversationTitle}</div>
+                          <div className="conversation-preview">{formatPreview(conv.messages)}</div>
+                          <div className="conversation-date">{formatDateShort(conv.lastUpdated)}</div>
+                        </div>
+                        <div className="conversation-actions">
+                          <button onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }} className="conversation-delete" title="Delete" aria-label={`Delete conversation ${conv.title}`}>
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
                       </div>
-                      <div className="conversation-actions">
-                        <button onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }} className="conversation-delete" title="Delete" aria-label={`Delete conversation ${conv.title}`}>
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -2500,16 +3640,18 @@ export default function App() {
     );
   });
 
-  const ArtifactManager = React.memo(({ isMobile }) => {
-    const [selectedFile, setSelectedFile] = useState(null);
-    const [isEditing, setIsEditing] = useState(false);
-    const [editedContent, setEditedContent] = useState('');
-    const [searchTerm, setSearchTerm] = useState('');
+  const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
     const debouncedSearchTerm = useDebounce(searchTerm, APP_CONFIG.TIMEOUTS.DEBOUNCE_DELAY);
-    const [expandedFolders, setExpandedFolders] = useState(new Set());
-    const [viewMode, setViewMode] = useState('editor');
-    const [mobilePanel, setMobilePanel] = useState('tree');
-
+  
+    // 🎯 FIX: Add a key to force re-render when artifacts change
+    const artifactKey = useMemo(() => 
+      `artifacts-${currentArtifacts.length}-${Date.now()}`,
+      [currentArtifacts]
+    );
+  
+    console.log("📁 [DEBUG] ArtifactManager rendering with:", currentArtifacts.length, "artifacts");
+    console.log("📁 [DEBUG] Current conversation ID:", currentConversationId);
+  
     const toggleFolder = useCallback((folderPath, e) => {
       if (e) e.stopPropagation();
       setExpandedFolders(prev => {
@@ -2519,35 +3661,40 @@ export default function App() {
         return newSet;
       });
     }, []);
-
+  
     const handleFileSelect = useCallback((file, e) => {
       if (e) e.stopPropagation();
+      console.log("📁 [DEBUG] File selected:", file.path);
       setSelectedFile(file);
       setEditedContent(file.content);
       setIsEditing(false);
       setViewMode('editor');
       if (isMobile) setMobilePanel('editor');
+      setShowEmptyState(false);
     }, [isMobile]);
-
+  
     const handleSave = useCallback(() => {
       if (selectedFile) {
+        console.log("📁 [DEBUG] Saving file:", selectedFile.path);
         const updatedArtifacts = currentArtifacts.map(art => 
           art.path === selectedFile.path ? { ...art, content: editedContent } : art
         );
         handleArtifactUpdate(updatedArtifacts);
         setIsEditing(false);
+        setShowEmptyState(false);
       }
     }, [selectedFile, editedContent, currentArtifacts, handleArtifactUpdate]);
-
+  
     const handleCancelEdit = useCallback(() => {
       if (selectedFile) setEditedContent(selectedFile.content);
       setIsEditing(false);
     }, [selectedFile]);
-
+  
     const handleDelete = useCallback((filePath, e) => {
       if (e) e.stopPropagation();
       if (!confirm(`Are you sure you want to delete "${filePath}"?\n\nThis will remove the file from your project and cannot be undone.`)) return;
       
+      console.log("📁 [DEBUG] Deleting file:", filePath);
       const updatedArtifacts = currentArtifacts.filter(art => art.path !== filePath);
       handleArtifactUpdate(updatedArtifacts);
       
@@ -2556,89 +3703,21 @@ export default function App() {
         setEditedContent('');
         if (isMobile) setMobilePanel('tree');
       }
+      
+      if (updatedArtifacts.length === 0) {
+        setShowEmptyState(true);
+      }
     }, [currentArtifacts, selectedFile, handleArtifactUpdate, isMobile]);
-
-    const handleCreateFile = useCallback((e, folderPath = '') => {
-      if (e) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-      
-      const baseName = folderPath ? `${folderPath}/` : '';
-      const defaultExtensions = {
-        'src/components': '.jsx',
-        'src': '.js',
-        'styles': '.css',
-        'utils': '.js',
-        '': '.txt'
-      };
-      
-      let extension = '.txt';
-      for (const [path, ext] of Object.entries(defaultExtensions)) {
-        if (folderPath.includes(path)) {
-          extension = ext;
-          break;
-        }
-      }
-      
-      const newFileName = `${baseName}new-file-${Date.now()}${extension}`;
-      const language = getLanguageFromPath(newFileName);
-      
-      const defaultContent = {
-        'jsx': `// ${newFileName}
-import React from 'react';
-
-export default function NewComponent() {
-  return (
-    <div>
-      New Component
-    </div>
-  );
-}`,
-        'js': `// ${newFileName}
-function newFunction() {
-  console.log('Hello World');
-}`,
-        'css': `/* ${newFileName} */
-.new-class {
-  color: blue;
-}`,
-        'html': `<!-- ${newFileName} -->
-<!DOCTYPE html>
-<html>
-<head>
-  <title>New File</title>
-</head>
-<body>
-  <h1>New File</h1>
-</body>
-</html>`
-      }[language] || `// ${newFileName}\n// New file created`;
-
-      const newFile = {
-        path: newFileName,
-        content: defaultContent,
-        language: language,
-        id: generateSafeId(newFileName),
-        name: newFileName.split('/').pop(),
-        fullPath: newFileName,
-        type: 'file'
-      };
-      
-      handleArtifactUpdate([...currentArtifacts, newFile]);
-      setSelectedFile(newFile);
-      setEditedContent(newFile.content);
-      setIsEditing(true);
-      setViewMode('editor');
-      if (isMobile) setMobilePanel('editor');
-    }, [currentArtifacts, handleArtifactUpdate, isMobile]);
-
+  
     const fileTree = useMemo(() => {
+      console.log("📁 [DEBUG] Building file tree from:", currentArtifacts.length, "artifacts");
+      
       const tree = {};
       
       const limitedArtifacts = currentArtifacts.slice(0, 100);
       
       limitedArtifacts.forEach(file => {
+        console.log("📁 [DEBUG] Processing file for tree:", file.path);
         const pathParts = file.path.split('/');
         let currentLevel = tree;
         
@@ -2669,12 +3748,13 @@ function newFunction() {
         });
       });
       
+      console.log("📁 [DEBUG] File tree built:", Object.keys(tree).length, "root items");
       return tree;
     }, [currentArtifacts]);
-
+  
     const filteredFileTree = useMemo(() => {
       if (!debouncedSearchTerm) return fileTree;
-
+  
       const filterTree = (node) => {
         const filtered = {};
         for (const key in node) {
@@ -2694,7 +3774,7 @@ function newFunction() {
       };
       return filterTree(fileTree);
     }, [fileTree, debouncedSearchTerm]);
-
+  
     const FileTreeComponent = useCallback(({ node, depth = 0 }) => {
       const items = Object.keys(node).sort((a, b) => {
         const aIsFolder = node[a].type === 'folder';
@@ -2703,18 +3783,20 @@ function newFunction() {
         if (!aIsFolder && bIsFolder) return 1;
         return a.localeCompare(b);
       }).slice(0, 50);
-
+  
+      console.log("📁 [DEBUG] Rendering tree component with", items.length, "items at depth", depth);
+  
       return items.map((key) => {
         const item = node[key];
         if (!item) return null;
         
         const isExpanded = expandedFolders.has(item.fullPath);
         const isSelected = selectedFile?.path === item.fullPath;
-
+  
         if (item.type === 'file') {
           return (
             <div
-              key={`file-${item.fullPath}`}
+              key={`file-${item.fullPath}-${item.id}`}
               className={`file-tree-item file ${isSelected ? 'selected' : ''}`}
               style={{ paddingLeft: `${depth * 16 + 8}px` }}
               onClick={(e) => handleFileSelect(item, e)}
@@ -2753,9 +3835,9 @@ function newFunction() {
         }
       });
     }, [expandedFolders, selectedFile, handleFileSelect, toggleFolder]);
-
+  
     return (
-      <div className={`artifact-manager ${isMobile ? 'mobile' : ''}`}>
+      <div key={artifactKey} className={`artifact-manager ${isMobile ? 'mobile' : ''}`}>
         {(!isMobile || mobilePanel === 'tree') && (
           <div className="file-tree-panel">
             <div className="panel-header">
@@ -2764,15 +3846,82 @@ function newFunction() {
                 <span>Project Files</span>
                 <span className="file-count">({currentArtifacts.length})</span>
               </div>
-              <button 
-                onClick={(e) => handleCreateFile(e, '')} 
-                className="icon-button small primary" 
-                title="Create new file"
-                aria-label="Create new file"
-              >
-                <Plus size={14} />
-              </button>
+              <div className="panel-actions-wrapper" ref={createMenuRef}>
+                <button 
+                  onClick={() => {
+                    console.log("📁 [DEBUG] Create menu clicked");
+                    setShowCreateMenu(prev => !prev);
+                  }} 
+                  className="icon-button small primary" 
+                  title="Create new"
+                  aria-label="Create new file or folder"
+                >
+                  <Plus size={14} />
+                </button>
+                {showCreateMenu && (
+                  <CreateMenu onClose={() => setShowCreateMenu(false)} />
+                )}
+                
+                {/* 🎯 ADD RECOVERY BUTTON */}
+                <button 
+                  onClick={() => {
+                    console.log("🔄 [RECOVERY] Manual recovery triggered");
+                    
+                    // Reload from localStorage
+                    const savedArtifacts = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS);
+                    if (savedArtifacts) {
+                      try {
+                        const parsed = JSON.parse(savedArtifacts);
+                        const fixed = fixCorruptedArtifacts(parsed);
+                        setArtifacts(fixed);
+                        
+                        // Update current artifacts if we have this conversation
+                        if (currentConversationId && fixed[currentConversationId]) {
+                          const message = `Recovered ${fixed[currentConversationId].length} files for current conversation`;
+                          console.log("🔄 [RECOVERY]", message);
+                          alert(message);
+                        } else {
+                          const totalFiles = Object.values(fixed).reduce((sum, arr) => sum + arr.length, 0);
+                          const message = `Recovered ${Object.keys(fixed).length} conversations with ${totalFiles} total files`;
+                          console.log("🔄 [RECOVERY]", message);
+                          alert(message);
+                        }
+                      } catch (error) {
+                        console.error("❌ [RECOVERY] Failed to recover:", error);
+                        alert("Failed to recover artifacts: " + error.message);
+                      }
+                    } else {
+                      console.log("🔄 [RECOVERY] No saved artifacts found");
+                      alert("No saved artifacts found in localStorage");
+                    }
+                  }}
+                  className="icon-button small warning"
+                  title="Recover artifacts"
+                  aria-label="Recover artifacts from storage"
+                >
+                  <Shield size={14} />
+                </button>
+                
+                <button 
+                  onClick={() => {
+                    console.log("📁 [DEBUG] Manual refresh triggered");
+                    // Force re-render
+                    setArtifacts(prev => ({...prev}));
+                  }}
+                  className="icon-button small"
+                  title="Refresh"
+                  aria-label="Refresh project files"
+                >
+                  <RotateCcw size={14} />
+                </button>
+              </div>
             </div>
+            
+            {creatingFolder && (
+              <div className="creating-folder-container">
+                <FolderCreationInput />
+              </div>
+            )}
             
             <div className="search-box">
               <Search size={14} />
@@ -2796,17 +3945,15 @@ function newFunction() {
             </div>
             
             <div className="file-tree-container">
-              {Object.keys(filteredFileTree).length === 0 ? (
-                <div className="empty-tree-state">
-                  <FileText size={20} />
-                  <p>No files found</p>
-                  {debouncedSearchTerm && <small>Try a different search term</small>}
-                </div>
+              {currentArtifacts.length === 0 || Object.keys(filteredFileTree).length === 0 ? (
+                showEmptyState && <EmptyArtifactsPlaceholder />
               ) : (
-                <FileTreeComponent node={filteredFileTree} />
+                <div className="file-tree-content">
+                  <FileTreeComponent node={filteredFileTree} />
+                </div>
               )}
             </div>
-
+  
             {isMobile && selectedFile && (
               <button 
                 className="mobile-view-file-btn"
@@ -2883,6 +4030,24 @@ function newFunction() {
                     >
                       <Trash2 size={14} />
                     </button>
+                    <button 
+                      onClick={() => {
+                        if (selectedFile) {
+                          console.log("📁 [DEBUG] Manual add to project:", selectedFile.path);
+                          const artifactToAdd = {
+                            ...selectedFile,
+                            id: generateSafeId(selectedFile.path),
+                            timestamp: new Date().toISOString()
+                          };
+                          handleArtifactUpdate([...currentArtifacts, artifactToAdd]);
+                        }
+                      }}
+                      className="icon-button small primary"
+                      aria-label="Add to project"
+                      title="Add to project"
+                    >
+                      <Plus size={14} />
+                    </button>
                   </div>
                 </div>
                 
@@ -2916,11 +4081,11 @@ function newFunction() {
                 <h3>No file selected</h3>
                 <p>Select a file from the sidebar to view or edit its contents</p>
                 <button 
-                  onClick={(e) => handleCreateFile(e, '')} 
+                  onClick={() => handleCreateNewFile()} 
                   className="create-file-button"
                   aria-label="Create new file"
                 >
-                  <Plus size={16} />Create New File
+                  <FilePlus size={16} />Create New File
                 </button>
               </div>
             )}
@@ -2943,13 +4108,8 @@ function newFunction() {
               <div className="header-brand">
                 <div className="header-logo"><User className="icon" /></div>
                 <div className="header-title-section">
-                  <div className="header-title">Ollama Chat</div>
-                  {currentArtifacts.length > 0 && (
-                    <div className="header-subtitle">
-                      <FileText size={12} />
-                      <span>Reading {currentArtifacts.length} file{currentArtifacts.length !== 1 ? 's' : ''}</span>
-                    </div>
-                  )}
+                  <div className="header-title">Ollama Chat
+                  </div>
                 </div>
               </div>
               <div className="header-status">
@@ -2967,7 +4127,7 @@ function newFunction() {
             
             <div className="header-right">
               <div className="header-actions">
-                {currentArtifacts.length > 0 && !isMobile && (
+                {(currentArtifacts.length > 0 || showEmptyState) && !isMobile && (
                   <button 
                     className={`icon-button ${showArtifacts ? 'active' : ''}`} 
                     onClick={toggleArtifactsPanel} 
@@ -2977,6 +4137,28 @@ function newFunction() {
                     <SquareStack className="icon" />
                   </button>
                 )}
+                <button 
+                  onClick={() => {
+                    // Force reload conversations from localStorage
+                    const saved = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS);
+                    if (saved) {
+                      try {
+                        const convos = JSON.parse(saved);
+                        setConversations(convos);
+                        alert(`Recovered ${convos.length} conversations`);
+                      } catch (error) {
+                        alert("Failed to recover conversations: " + error.message);
+                      }
+                    } else {
+                      alert("No saved conversations found");
+                    }
+                  }}
+                  className="icon-button"
+                  title="Recover conversations"
+                  aria-label="Recover conversations from storage"
+                >
+                  <Shield size={16} />
+                </button>
                 <ThemeToggle />
                 <SettingsDropdown />
                 <ModelDropdown />
@@ -3007,9 +4189,28 @@ function newFunction() {
             <div className={`artifacts-panel ${isMobile ? 'mobile' : ''} ${showArtifacts ? 'open' : ''}`}>
               <div className="artifacts-header">
                 <h3>Project Files ({currentArtifacts.length})</h3>
-                <button onClick={toggleArtifactsPanel} className="icon-button" aria-label="Close project files"><X size={16} /></button>
+                <div className="artifacts-header-actions">
+                  <button 
+                    onClick={() => {
+                      console.log("🔄 Manual refresh from header");
+                      // Force state update
+                      setArtifacts(prev => ({...prev}));
+                    }}
+                    className="icon-button small"
+                    title="Refresh"
+                    aria-label="Refresh project files"
+                  >
+                    <RotateCcw size={14} />
+                  </button>
+                  <button onClick={toggleArtifactsPanel} className="icon-button" aria-label="Close project files">
+                    <X size={16} />
+                  </button>
+                </div>
               </div>
-              <ArtifactManager isMobile={isMobile} />
+              <ArtifactManager 
+                isMobile={isMobile} 
+                currentConversationId={currentConversationId}
+              />
             </div>
           )}
 
@@ -3109,7 +4310,7 @@ function newFunction() {
           </div>
         </footer>
 
-        {isMobile && currentArtifacts.length > 0 && (
+        {isMobile && (currentArtifacts.length > 0 || showEmptyState) && (
           <button 
             className="mobile-artifact-toggle" 
             onClick={toggleArtifactsPanel} 
