@@ -208,6 +208,11 @@ const fixCorruptedArtifacts = (artifactsData) => {
 
 const ENHANCED_SYSTEM_PROMPT = `You are an advanced AI coding assistant with intelligent file editing capabilities.
 
+## CRITICAL: CHECK CURRENT FILE STATE
+1. 🚨 ALWAYS check the CURRENT file content shown in "EXISTING PROJECT FILES" below
+2. The user may have edited files since your last response
+3. Your SEARCH blocks MUST match the CURRENT content exactly
+
 ## FILE CREATION FORMAT:
 
 ### TO CREATE NEW FILES, use this EXACT format:
@@ -487,9 +492,15 @@ export default function App() {
   const saveTimeoutRef = useRef(null);
   const lastSaveRef = useRef(Date.now());
 
+  // 🎯 FIX: Add ref to track current artifacts for use in sendMessage
+  const currentArtifactsRef = useRef([]);
+
   // 🎯 DERIVED STATE
   const currentArtifacts = useMemo(() => {
-    return artifacts[currentConversationId] || [];
+    const arts = artifacts[currentConversationId] || [];
+    // Update the ref whenever currentArtifacts changes
+    currentArtifactsRef.current = arts;
+    return arts;
   }, [artifacts, currentConversationId]);
 
   // 🎯 SELECTED FILE STATE (for ArtifactManager)
@@ -1077,47 +1088,64 @@ export default function App() {
     return null;
   }, []);
 
-const getEnhancedFileContext = useCallback((artifacts, userInput) => {
-  if (artifacts.length === 0) {
-    return '\n\nPROJECT CONTEXT: No existing files. Starting fresh project.';
-  }
-
-  const contextParts = [];
-  contextParts.push('## EXISTING PROJECT FILES (You MUST read these before editing):');
-  contextParts.push('CRITICAL: When making edits, your SEARCH blocks MUST match EXACT lines from these files.');
-  contextParts.push('CRITICAL: Make MINIMAL changes - only change what is necessary.');
-  
-  const filesToShow = artifacts.slice(0, 15);
-  
-  filesToShow.forEach(file => {
-    const lineCount = file.content.split('\n').length;
-    
-    const maxContentLength = 2000;
-    let content = file.content;
-    if (content.length > maxContentLength) {
-      content = content.substring(0, maxContentLength) + '\n// ... (content truncated for context)';
+  // 🎯 FIXED: getEnhancedFileContext now uses currentArtifacts to get latest content
+  const getEnhancedFileContext = useCallback((artifacts, userInput) => {
+    if (!artifacts || artifacts.length === 0) {
+      return '\n\nPROJECT CONTEXT: No existing files. Starting fresh project.';
     }
+
+    // Get the absolute latest content by finding each artifact in currentArtifactsRef
+    const getLatestArtifactContent = (artifactPath) => {
+      // Check if this artifact exists in currentArtifacts (which has user edits)
+      const currentArtifact = currentArtifactsRef.current.find(a => a.path === artifactPath);
+      if (currentArtifact) {
+        return currentArtifact.content;
+      }
+      // Fall back to the provided artifact content
+      const providedArtifact = artifacts.find(a => a.path === artifactPath);
+      return providedArtifact?.content || '';
+    };
+
+    const contextParts = [];
+    contextParts.push('## EXISTING PROJECT FILES (You MUST read these before editing):');
+    contextParts.push('CRITICAL: When making edits, your SEARCH blocks MUST match EXACT lines from these files.');
+    contextParts.push('CRITICAL: Make MINIMAL changes - only change what is necessary.');
+    contextParts.push('CRITICAL: User may have modified these files since last AI response.');
     
-    contextParts.push(`### FILE: ${file.path} (${lineCount} lines, ${file.language})`);
-    contextParts.push('```' + file.language);
-    contextParts.push(content);
-    contextParts.push('```');
-    contextParts.push('');
-  });
+    const filesToShow = artifacts.slice(0, 15);
+    
+    filesToShow.forEach(file => {
+      // Use the latest content, not just what was parsed from AI response
+      const latestContent = getLatestArtifactContent(file.path);
+      const lineCount = latestContent.split('\n').length;
+      
+      const maxContentLength = 2000;
+      let content = latestContent;
+      if (content.length > maxContentLength) {
+        content = content.substring(0, maxContentLength) + '\n// ... (content truncated for context)';
+      }
+      
+      contextParts.push(`### FILE: ${file.path} (${lineCount} lines, ${file.language})`);
+      contextParts.push('```' + file.language);
+      contextParts.push(content);
+      contextParts.push('```');
+      contextParts.push('');
+    });
 
-  if (artifacts.length > 15) {
-    contextParts.push(`... and ${artifacts.length - 15} more files (truncated for performance)`);
-  }
+    if (artifacts.length > 15) {
+      contextParts.push(`... and ${artifacts.length - 15} more files (truncated for performance)`);
+    }
 
-  contextParts.push('## EDITING INSTRUCTIONS:');
-  contextParts.push('1. BEFORE writing any SEARCH/REPLACE blocks, examine the relevant file above');
-  contextParts.push('2. Copy the EXACT lines you want to change (including all whitespace)');
-  contextParts.push('3. Make MINIMAL changes - only change what is necessary');
-  contextParts.push('4. DO NOT rewrite entire files or large sections unless explicitly asked');
-  contextParts.push('5. If changing multiple lines, include them all in SEARCH block');
+    contextParts.push('## EDITING INSTRUCTIONS:');
+    contextParts.push('1. BEFORE writing any SEARCH/REPLACE blocks, examine the relevant file above');
+    contextParts.push('2. Copy the EXACT lines you want to change (including all whitespace)');
+    contextParts.push('3. Make MINIMAL changes - only change what is necessary');
+    contextParts.push('4. DO NOT rewrite entire files or large sections unless explicitly asked');
+    contextParts.push('5. If changing multiple lines, include them all in SEARCH block');
+    contextParts.push('6. NOTE: User may have modified files since your last response. Use the content shown above.');
 
-  return contextParts.join('\n');
-}, []);
+    return contextParts.join('\n');
+  }, []);
 
   // 🎯 USE EFFECTS
   useEffect(() => {
@@ -1572,9 +1600,10 @@ const getEnhancedFileContext = useCallback((artifacts, userInput) => {
     }
   }, [retryCount]);
 
-const getFileContext = useCallback(() => {
-  return getEnhancedFileContext(currentArtifacts, input);
-}, [currentArtifacts, input, getEnhancedFileContext]);
+  // 🎯 FIXED: Use currentArtifactsRef to get the latest file context
+  const getCurrentFileContext = useCallback(() => {
+    return getEnhancedFileContext(currentArtifactsRef.current, input);
+  }, [getEnhancedFileContext, input]);
 
   // 🎯 CREATE NEW FILE FUNCTION
   const handleCreateNewFile = useCallback((folderPath = '') => {
@@ -1837,7 +1866,8 @@ if __name__ == "__main__":
 
     if (!currentConversationId && conversations.length === 0) createNewConversation();
 
-    const fileContext = getFileContext();
+    // 🎯 FIX: Use getCurrentFileContext which uses currentArtifactsRef
+    const fileContext = getCurrentFileContext();
     const combinedSystemPrompt = systemPrompt.trim() ? 
       `${DEFAULT_SYSTEM_PROMPT}\n\n${fileContext}\n\nAdditional instructions:\n${systemPrompt.trim()}` : 
       `${DEFAULT_SYSTEM_PROMPT}\n\n${fileContext}`;
@@ -2016,7 +2046,7 @@ if __name__ == "__main__":
       if (fileInputRef.current) fileInputRef.current.value = '';
       setTimeout(() => textareaRef.current?.focus(), 100);
     }
-  }, [input, isLoading, messages, selectedModel, systemPrompt, imageFile, imagePreview, currentConversationId, conversations, createNewConversation, showArtifacts, currentArtifacts, handleArtifactUpdate, getFileContext, parseLLMResponse, saveConversations]);
+  }, [input, isLoading, messages, selectedModel, systemPrompt, imageFile, imagePreview, currentConversationId, conversations, createNewConversation, showArtifacts, currentArtifacts, handleArtifactUpdate, getCurrentFileContext, parseLLMResponse, saveConversations]);
 
   const handleKeyDown = useCallback((e) => { 
     if (e.key === "Enter" && e.ctrlKey) { 
