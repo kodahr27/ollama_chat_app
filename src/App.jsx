@@ -466,6 +466,7 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(false);
   const [viewingEdit, setViewingEdit] = useState(null);
   const [showStorageManagement, setShowStorageManagement] = useState(false);
+  const [currentEdits, setCurrentEdits] = useState([]);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
