@@ -1145,20 +1145,6 @@ const getEnhancedFileContext = useCallback((artifacts, userInput) => {
     }
   }, [showArtifacts, initialLoadComplete]);
 
-  useEffect(() => {
-    if (!initialLoadComplete) return;
-    
-    const allEdits = [];
-    const recentMessages = messages.slice(-20);
-    
-    for (const msg of recentMessages) {
-      if (msg.parsedResponse?.edits) {
-        allEdits.push(...msg.parsedResponse.edits.slice(0, 3));
-      }
-    }
-    setCurrentEdits(allEdits);
-  }, [messages, initialLoadComplete]);
-
   const handleArtifactUpdate = useCallback((newArtifacts) => {
     if (!currentConversationId) {
       const newConvId = generateSafeId('conv');
@@ -3953,17 +3939,6 @@ if __name__ == "__main__":
                     </div>
                   )}
                 </div>
-              </div>
-              <div className="header-status">
-                {currentArtifacts && currentArtifacts.length > 0 && (
-                  <div className="artifact-indicator">
-                    <FileText size={14} />
-                    <span>{currentArtifacts.length} file{currentArtifacts.length !== 1 ? 's' : ''}</span>
-                    {currentEdits.length > 0 && (
-                      <span className="edit-count">{currentEdits.length} edits</span>
-                    )}
-                  </div>
-                )}
               </div>
             </div>
             
