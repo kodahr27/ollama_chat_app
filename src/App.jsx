@@ -240,7 +240,7 @@ print("Hello World")
 ### CRITICAL WORKFLOW:
 1. 🚨 ALWAYS read the EXISTING PROJECT FILES first (provided below)
 2. Understand the exact file structure and content
-3. Only then create SEARCH/REPLACE blocks
+3. ONLY change what's necessary - make MINIMAL changes
 
 ### CREATING NEW FILES:
 Use standard code blocks with a filename comment:
@@ -251,11 +251,12 @@ export function Button({ children, onClick }) {
 }
 \`\`\`
 
-### EDITING EXISTING FILES:
+### EDITING EXISTING FILES - MINIMAL CHANGES ONLY:
 1. First locate the file in "EXISTING PROJECT FILES"
-2. Find the exact lines you want to change
+2. Find the EXACT lines you want to change
 3. Copy them EXACTLY (character-for-character) into SEARCH
-4. Create the REPLACE block
+4. Create the REPLACE block with ONLY the necessary changes
+5. NEVER rewrite entire files unless explicitly asked
 
 ### FORMAT FOR SINGLE-LINE CHANGES:
 \`\`\`edit
@@ -267,7 +268,7 @@ print("Goodbye")
 >>>>>>> REPLACE
 \`\`\`
 
-### FORMAT FOR MULTI-LINE CHANGES:
+### FORMAT FOR MULTI-LINE CHANGES (Minimal):
 \`\`\`edit
 @@@ filename.js
 <<<<<<< SEARCH
@@ -276,19 +277,46 @@ function oldFunction() {
   return 42;
 }
 =======
-function newFunction() {
+function oldFunction() {
   console.log("new");
   return 100;
 }
 >>>>>>> REPLACE
 \`\`\`
 
-### ABSOLUTE RULES:
+### ABSOLUTE RULES - MINIMAL CHANGES:
 1. ⚠️ SEARCH blocks MUST be copied DIRECTLY from the files shown below
 2. ⚠️ Include ALL whitespace, indentation, and newlines exactly as shown
-3. ⚠️ If unsure, ask the user to show you the specific section
-4. ⚠️ Never invent or guess file content - only use what's provided
-5. For complex changes, provide multiple SEARCH/REPLACE blocks`;
+3. ⚠️ If changing multiple lines, include ONLY the lines that change
+4. ⚠️ NEVER rewrite entire functions/files unless explicitly requested
+5. ⚠️ Make the SMALLEST possible change to achieve the goal
+6. ⚠️ If unsure, ask the user to show you the specific section
+7. ⚠️ Never invent or guess file content - only use what's provided
+
+### EXAMPLES OF GOOD VS BAD:
+BAD (rewrites entire file):
+\`\`\`edit
+@@@ main.js
+<<<<<<< SEARCH
+const greeting = "Hello";
+console.log(greeting);
+=======
+const greeting = "Hi there!";
+console.log(greeting + " world!");
+>>>>>>> REPLACE
+\`\`\`
+
+GOOD (minimal change):
+\`\`\`edit
+@@@ main.js
+<<<<<<< SEARCH
+const greeting = "Hello";
+=======
+const greeting = "Hi there!";
+>>>>>>> REPLACE
+\`\`\`
+
+For complex changes, provide multiple SMALL SEARCH/REPLACE blocks rather than one large one.`;
 
 const DEFAULT_SYSTEM_PROMPT = ENHANCED_SYSTEM_PROMPT;
 
@@ -438,7 +466,6 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(false);
   const [viewingEdit, setViewingEdit] = useState(null);
   const [showStorageManagement, setShowStorageManagement] = useState(false);
-  const [currentEdits, setCurrentEdits] = useState([]);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
@@ -1049,51 +1076,47 @@ export default function App() {
     return null;
   }, []);
 
-  const getEnhancedFileContext = useCallback((artifacts, userInput, currentEdits = []) => {
-    if (artifacts.length === 0) {
-      return '\n\nPROJECT CONTEXT: No existing files. Starting fresh project.';
-    }
+const getEnhancedFileContext = useCallback((artifacts, userInput) => {
+  if (artifacts.length === 0) {
+    return '\n\nPROJECT CONTEXT: No existing files. Starting fresh project.';
+  }
 
-    const contextParts = [];
-    contextParts.push('## EXISTING PROJECT FILES (You MUST read these before editing):');
-    contextParts.push('CRITICAL: When making edits, your SEARCH blocks MUST match EXACT lines from these files.');
+  const contextParts = [];
+  contextParts.push('## EXISTING PROJECT FILES (You MUST read these before editing):');
+  contextParts.push('CRITICAL: When making edits, your SEARCH blocks MUST match EXACT lines from these files.');
+  contextParts.push('CRITICAL: Make MINIMAL changes - only change what is necessary.');
+  
+  const filesToShow = artifacts.slice(0, 15);
+  
+  filesToShow.forEach(file => {
+    const lineCount = file.content.split('\n').length;
     
-    const filesToShow = artifacts.slice(0, 15);
-    
-    filesToShow.forEach(file => {
-      const lineCount = file.content.split('\n').length;
-      
-      const maxContentLength = 2000;
-      let content = file.content;
-      if (content.length > maxContentLength) {
-        content = content.substring(0, maxContentLength) + '\n// ... (content truncated for context)';
-      }
-      
-      contextParts.push(`### FILE: ${file.path} (${lineCount} lines, ${file.language})`);
-      contextParts.push('```' + file.language);
-      contextParts.push(content);
-      contextParts.push('```');
-      contextParts.push('');
-    });
-
-    if (artifacts.length > 15) {
-      contextParts.push(`... and ${artifacts.length - 15} more files (truncated for performance)`);
+    const maxContentLength = 2000;
+    let content = file.content;
+    if (content.length > maxContentLength) {
+      content = content.substring(0, maxContentLength) + '\n// ... (content truncated for context)';
     }
-
-    contextParts.push('## EDITING INSTRUCTIONS:');
-    contextParts.push('1. BEFORE writing any SEARCH/REPLACE blocks, examine the relevant file above');
-    contextParts.push('2. Copy the EXACT lines you want to change (including all whitespace)');
-    contextParts.push('3. If changing multiple lines, include them all in SEARCH block');
     
-    if (currentEdits.length > 0) {
-      contextParts.push('\n## RECENT EDITS (for reference):');
-      currentEdits.slice(-2).forEach((edit, idx) => {
-        contextParts.push(`${idx + 1}. ${edit.path}: ${edit.operationCount} operations`);
-      });
-    }
+    contextParts.push(`### FILE: ${file.path} (${lineCount} lines, ${file.language})`);
+    contextParts.push('```' + file.language);
+    contextParts.push(content);
+    contextParts.push('```');
+    contextParts.push('');
+  });
 
-    return contextParts.join('\n');
-  }, []);
+  if (artifacts.length > 15) {
+    contextParts.push(`... and ${artifacts.length - 15} more files (truncated for performance)`);
+  }
+
+  contextParts.push('## EDITING INSTRUCTIONS:');
+  contextParts.push('1. BEFORE writing any SEARCH/REPLACE blocks, examine the relevant file above');
+  contextParts.push('2. Copy the EXACT lines you want to change (including all whitespace)');
+  contextParts.push('3. Make MINIMAL changes - only change what is necessary');
+  contextParts.push('4. DO NOT rewrite entire files or large sections unless explicitly asked');
+  contextParts.push('5. If changing multiple lines, include them all in SEARCH block');
+
+  return contextParts.join('\n');
+}, []);
 
   // 🎯 USE EFFECTS
   useEffect(() => {
@@ -1562,9 +1585,9 @@ export default function App() {
     }
   }, [retryCount]);
 
-  const getFileContext = useCallback(() => {
-    return getEnhancedFileContext(currentArtifacts, input, currentEdits);
-  }, [currentArtifacts, input, currentEdits, getEnhancedFileContext]);
+const getFileContext = useCallback(() => {
+  return getEnhancedFileContext(currentArtifacts, input);
+}, [currentArtifacts, input, getEnhancedFileContext]);
 
   // 🎯 CREATE NEW FILE FUNCTION
   const handleCreateNewFile = useCallback((folderPath = '') => {
