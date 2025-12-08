@@ -28,7 +28,6 @@ import {
   FileText,
   Folder,
   Edit,
-  Save,
   ChevronRight,
   Search,
   FileCode,
@@ -124,7 +123,6 @@ const getLanguageFromPath = (path) => {
   return languageMap[ext] || 'text';
 };
 
-// Add this function to your utility functions section
 const loadBackupConversations = () => {
   try {
     const backupKeys = Object.keys(localStorage)
@@ -173,7 +171,6 @@ const deduplicateArtifacts = (artifacts) => {
   });
 };
 
-// Add this function after your other utility functions
 const fixCorruptedArtifacts = (artifactsData) => {
   if (!artifactsData || typeof artifactsData !== 'object') {
     console.log("🔄 [FIX] No artifacts data to fix");
@@ -186,7 +183,6 @@ const fixCorruptedArtifacts = (artifactsData) => {
     const artifacts = artifactsData[conversationId];
     
     if (Array.isArray(artifacts)) {
-      // Filter out invalid artifacts and ensure they have required fields
       const validArtifacts = artifacts.filter(artifact => 
         artifact && 
         typeof artifact === 'object' && 
@@ -202,9 +198,7 @@ const fixCorruptedArtifacts = (artifactsData) => {
       }));
       
       fixed[conversationId] = validArtifacts;
-      console.log(`🔄 [FIX] Fixed ${validArtifacts.length} artifacts for conversation ${conversationId}`);
     } else {
-      console.log(`🔄 [FIX] Invalid artifacts for conversation ${conversationId}, resetting to empty array`);
       fixed[conversationId] = [];
     }
   });
@@ -413,24 +407,8 @@ const LoadingSkeleton = React.memo(() => (
   </div>
 ));
 
-const ThemeToggle = React.memo(() => {
-  const { theme, toggleTheme } = useTheme();
-  
-  return (
-    <button
-      onClick={toggleTheme}
-      className="theme-toggle"
-      title={`Theme: ${theme}`}
-      aria-label={`Toggle theme, current: ${theme}`}
-    >
-      {theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
-    </button>
-  );
-});
-
 // 🎯 MAIN APP COMPONENT
 export default function App() {
-  // Performance optimization
   const renderCount = useRef(0);
   renderCount.current++;
   
@@ -465,6 +443,8 @@ export default function App() {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [showEmptyState, setShowEmptyState] = useState(true);
+  const [mobilePanel, setMobilePanel] = useState('tree');
+  const [lastSaveTime, setLastSaveTime] = useState(null);
 
   const abortControllerRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -477,13 +457,22 @@ export default function App() {
   const createMenuRef = useRef(null);
   const folderInputRef = useRef(null);
   const saveTimeoutRef = useRef(null);
+  const lastSaveRef = useRef(Date.now());
 
   // 🎯 DERIVED STATE
   const currentArtifacts = useMemo(() => {
     return artifacts[currentConversationId] || [];
   }, [artifacts, currentConversationId]);
 
-  // 🎯 PARSE SEARCH/REPLACE - MUST BE DEFINED BEFORE parseLLMResponse
+  // 🎯 SELECTED FILE STATE (for ArtifactManager)
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedContent, setEditedContent] = useState('');
+  const [expandedFolders, setExpandedFolders] = useState(new Set());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [viewMode, setViewMode] = useState('editor');
+
+  // 🎯 PARSE SEARCH/REPLACE
   const parseSearchReplace = useCallback((content) => {
     if (!content || typeof content !== 'string' || content.length < 20) {
       return [];
@@ -518,9 +507,7 @@ export default function App() {
     
     const limitedOperations = operations.slice(0, 20);
     
-    // Normalize whitespace for comparison while preserving structure
     const normalizeForComparison = (str) => {
-      // Preserve line structure but normalize spaces/tabs within lines
       return str.split('\n').map(line => {
         const leadingWhitespace = line.match(/^[\s]*/)[0];
         const content = line.trim();
@@ -528,26 +515,21 @@ export default function App() {
       });
     };
     
-    // Sort operations to apply them from the end to beginning
     const sortedOperations = [...limitedOperations].map((op, index) => ({
       ...op,
       originalIndex: index
     }));
     
-    // Apply operations in reverse order to maintain string indices
     for (let i = sortedOperations.length - 1; i >= 0; i--) {
       const op = sortedOperations[i];
       const { search, replace } = op;
       
-      // First try exact match
       let lastIndex = result.lastIndexOf(search);
       
-      // If exact match fails, try fuzzy matching with normalized whitespace
       if (lastIndex === -1) {
         const searchLines = normalizeForComparison(search);
         const resultLines = result.split('\n');
         
-        // Try to find a fuzzy match
         for (let startIdx = resultLines.length - 1; startIdx >= 0; startIdx--) {
           let matchFound = true;
           const potentialMatch = [];
@@ -556,7 +538,6 @@ export default function App() {
             const resultLine = resultLines[startIdx + j];
             const searchLine = searchLines[j];
             
-            // Compare content, ignoring differences in indentation amount
             const resultContent = resultLine.trim();
             
             if (resultContent !== searchLine.content) {
@@ -567,7 +548,6 @@ export default function App() {
           }
           
           if (matchFound && potentialMatch.length === searchLines.length) {
-            // Found a fuzzy match - replace it
             const matchStr = potentialMatch.join('\n');
             const beforeMatch = resultLines.slice(0, startIdx).join('\n');
             const afterMatch = resultLines.slice(startIdx + searchLines.length).join('\n');
@@ -578,12 +558,11 @@ export default function App() {
                     (afterMatch ? '\n' : '') + 
                     afterMatch;
             appliedCount++;
-            lastIndex = 0; // Mark as found
+            lastIndex = 0;
             break;
           }
         }
       } else {
-        // Exact match found
         result = result.substring(0, lastIndex) + 
                  replace + 
                  result.substring(lastIndex + search.length);
@@ -608,7 +587,6 @@ export default function App() {
     return { result, appliedCount, failedOps };
   }, []);
 
-  // 🎯 STRING SIMILARITY HELPER
   const calculateSimilarity = useCallback((str1, str2) => {
     if (str1 === str2) return 1;
     
@@ -630,7 +608,7 @@ export default function App() {
     return intersection.size / union.size;
   }, []);
 
-  // 🎯 PARSE LLM RESPONSE - MUST BE AFTER parseSearchReplace
+  // 🎯 PARSE LLM RESPONSE
   const parseLLMResponse = useCallback((message) => {
     try {
       if (!message || typeof message !== 'string') {
@@ -646,7 +624,6 @@ export default function App() {
       const edits = [];
       let regularContent = limitedMessage;
 
-      // Parse edit blocks
       const editBlockRegex = /```(?:edit)?\s*\r?\n([\s\S]*?)\r?\n```/gi;
       const editBlocks = [];
       let editMatch;
@@ -659,7 +636,6 @@ export default function App() {
         });
       }
 
-      // Map to consolidate edits for the same file
       const editsByFile = new Map();
       
       for (const block of editBlocks) {
@@ -671,13 +647,11 @@ export default function App() {
           targetFile = validateAndSanitizePath(fileMarkerMatch[1].trim());
           editContent = block.content.replace(fileMarkerMatch[0], '').trim();
         } else {
-          // Try to find file marker in the first few lines
           const lines = block.content.split('\n');
           for (let i = 0; i < Math.min(3, lines.length); i++) {
             const lineMatch = lines[i].match(/(?:@@@|\/\/\/|#|File:|file:|filename:)\s*(.+)/i);
             if (lineMatch) {
               targetFile = validateAndSanitizePath(lineMatch[1].trim());
-              // Remove the file marker line from editContent
               editContent = lines.slice(i + 1).join('\n').trim();
               break;
             }
@@ -691,14 +665,11 @@ export default function App() {
           
           const finalPath = targetFile || 'unknown';
           
-          // Check if we already have edits for this file
           if (editsByFile.has(finalPath)) {
-            // Append operations to existing edit
             const existingEdit = editsByFile.get(finalPath);
             existingEdit.operations.push(...operations);
             existingEdit.operationCount += operations.length;
           } else {
-            // Create new edit group
             const editGroup = {
               path: finalPath,
               operations: operations,
@@ -716,17 +687,12 @@ export default function App() {
         }
       }
       
-      // Convert map values to array
       const consolidatedEdits = Array.from(editsByFile.values());
       edits.push(...consolidatedEdits);
 
-      // Parse file creation blocks - ENHANCED with more patterns
       const filePatterns = [
-        // Pattern 1: // filename: path or # filename: path
         /```(\w+)?\s*\r?\n\s*(?:\/\/|#)\s*(?:filename|file):\s*([^\r\n]+)\r?\n([\s\S]*?)```/gi,
-        // Pattern 2: /* filename: path */
         /```(\w+)?\s*\r?\n\s*\/\*\s*(?:filename|file):\s*([^\r\n]+?)\s*\*\/\r?\n([\s\S]*?)```/gi,
-        // Pattern 3: Filename at top (no comment syntax)
         /```(\w+)?\s*\r?\n\s*([a-zA-Z0-9_\-\/\.]+\.\w+)\r?\n([\s\S]*?)```/gi,
       ];
 
@@ -739,12 +705,10 @@ export default function App() {
           const rawFilePath = match[2].trim();
           const content = match[3].trim();
           
-          // Skip if this looks like edit syntax
           if (content.includes('<<<<<<< SEARCH') || content.includes('=======') || content.includes('>>>>>>> REPLACE')) {
             continue;
           }
           
-          // Skip if the "filename" looks like actual code
           if (rawFilePath.includes('(') || rawFilePath.includes('{') || rawFilePath.includes('=')) {
             continue;
           }
@@ -761,10 +725,9 @@ export default function App() {
             createdBy: 'ai',
             timestamp: new Date().toISOString(),
             source: 'parsed',
-            // Add metadata for display
             lineCount: content.split('\n').length,
             size: content.length,
-            addedToProject: false // Will be set to true when added
+            addedToProject: false
           };
           
           artifacts.push(artifact);
@@ -772,7 +735,6 @@ export default function App() {
         }
       }
 
-      // Also look for inline file markers without code blocks
       const inlineFilePatterns = [
         /File:\s*([^\s]+)\s*\n```(\w+)?\s*\n([\s\S]*?)```/gi,
         /filename:\s*([^\s]+)\s*\n```(\w+)?\s*\n([\s\S]*?)```/gi,
@@ -814,13 +776,11 @@ export default function App() {
         }
       }
 
-      // Clean up regular content
       regularContent = regularContent
         .replace(/\n\s*\n\s*\n/g, '\n\n')
         .replace(/^\s+|\s+$/g, '')
         .trim();
 
-      // Parse instructions if any
       const instructions = [];
       if (regularContent.includes('1.') || regularContent.includes('First,') || regularContent.includes('Step')) {
         const instructionLines = regularContent.split('\n').filter(line => 
@@ -865,29 +825,22 @@ export default function App() {
     }
   }, [parseSearchReplace]);
 
-  // 🎯 FIXED: saveArtifacts with better debouncing
   const saveArtifacts = useCallback((newArtifacts) => {
     try {
-      console.log("💾 [SAVE] Saving artifacts to localStorage:", 
-        Object.keys(newArtifacts).length, "conversations");
-      
-      // If artifacts are empty, remove from localStorage
       if (!newArtifacts || Object.keys(newArtifacts).length === 0) {
-        console.log("💾 [SAVE] No artifacts to save, removing from localStorage");
         localStorage.removeItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS);
+        setLastSaveTime(new Date().toISOString());
         return;
       }
       
-      // Save the artifacts
       const dataSize = new Blob([JSON.stringify(newArtifacts)]).size;
       if (dataSize > APP_CONFIG.LIMITS.MAX_STORAGE_BYTES * 0.9) {
         console.warn('💾 [SAVE] Storage approaching limit');
       }
       
       localStorage.setItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS, JSON.stringify(newArtifacts));
-      console.log("💾 [SAVE] Artifacts saved successfully");
+      setLastSaveTime(new Date().toISOString());
       
-      // Create backup
       setTimeout(() => {
         try {
           const backupData = {
@@ -908,7 +861,6 @@ export default function App() {
           const backupKey = `${APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX}${Date.now()}`;
           localStorage.setItem(backupKey, JSON.stringify(backupData));
           
-          // Clean up old backups
           const backupKeys = Object.keys(localStorage)
             .filter(key => key.startsWith(APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX))
             .sort()
@@ -943,48 +895,49 @@ export default function App() {
     }
   }, []);
 
-  // 🎯 FIXED: Optimized saveConversations function - UPDATED VERSION
-  const saveConversations = useCallback((updatedConversations = conversations, forceSave = false) => {
+  const saveConversations = useCallback(() => {
     try {
-      console.log("💾 [SAVE] Starting saveConversations");
-      console.log("💾 [SAVE] Current conversation ID:", currentConversationId);
-      console.log("💾 [SAVE] Current messages:", messages.length);
-      console.log("💾 [SAVE] Current conversations:", conversations.length);
-      
-      // If there's no current conversation ID but we have messages, create one
       if (!currentConversationId && messages.length > 0) {
-        console.log("💾 [SAVE] No conversation ID but messages exist, creating new conversation");
         const newConvId = generateSafeId('conv');
         const newConversation = {
           id: newConvId,
           title: messages[0]?.content?.substring(0, 50) + (messages[0]?.content?.length > 50 ? '...' : '') || 'New Conversation',
-          messages: [...messages], // Create a copy of messages
+          messages: [...messages],
           lastUpdated: new Date().toISOString(),
           active: true,
           artifactCount: currentArtifacts.length
         };
         
-        setCurrentConversationId(newConvId);
-        const withNewConversation = [newConversation, ...updatedConversations];
-        setConversations(withNewConversation);
+        const savedConversations = JSON.parse(localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS) || '[]');
         
-        // Also update artifacts for this new conversation
+        const updatedConversations = savedConversations.map(conv => ({ 
+          ...conv, 
+          active: false 
+        }));
+        
+        updatedConversations.unshift(newConversation);
+        
+        localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
+        localStorage.setItem("ollama-chat-history", JSON.stringify(messages));
+        
+        setCurrentConversationId(newConvId);
+        setConversations(updatedConversations);
+        
         const updatedArtifacts = { ...artifacts, [newConvId]: currentArtifacts };
         setArtifacts(updatedArtifacts);
+        saveArtifacts(updatedArtifacts);
         
-        localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(withNewConversation));
-        localStorage.setItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS, JSON.stringify(updatedArtifacts));
-        console.log("💾 [SAVE] Created and saved new conversation:", newConvId);
+        setLastSaveTime(new Date().toISOString());
         return;
       }
       
-      // Update current conversation with latest messages
-      const conversationsWithCurrentUpdated = updatedConversations.map(conv => {
+      const savedConversations = JSON.parse(localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS) || '[]');
+      
+      const conversationsWithCurrentUpdated = savedConversations.map(conv => {
         if (conv.id === currentConversationId) {
-          console.log("💾 [SAVE] Updating conversation:", currentConversationId, "with", messages.length, "messages");
           return {
             ...conv,
-            messages: [...messages], // CRITICAL: Update with current messages
+            messages: [...messages],
             lastUpdated: new Date().toISOString(),
             title: messages.length > 0 
               ? (messages[0]?.content?.substring(0, 50) + (messages[0]?.content?.length > 50 ? '...' : '')) 
@@ -995,10 +948,8 @@ export default function App() {
         return { ...conv, active: false };
       });
       
-      // If conversation doesn't exist, add it
       const conversationExists = conversationsWithCurrentUpdated.some(conv => conv.id === currentConversationId);
       if (currentConversationId && messages.length > 0 && !conversationExists) {
-        console.log("💾 [SAVE] Adding new conversation to list:", currentConversationId);
         const newConversation = {
           id: currentConversationId,
           title: messages[0]?.content?.substring(0, 50) + (messages[0]?.content?.length > 50 ? '...' : '') || 'New Conversation',
@@ -1010,24 +961,24 @@ export default function App() {
         conversationsWithCurrentUpdated.unshift(newConversation);
       }
       
-      console.log("💾 [SAVE] Final conversations to save:", conversationsWithCurrentUpdated.length);
-      conversationsWithCurrentUpdated.forEach((conv, idx) => {
-        console.log(`💾 [SAVE] Conversation ${idx}: ${conv.id}, messages: ${conv.messages?.length || 0}, active: ${conv.active}`);
-      });
-      
-      setConversations(conversationsWithCurrentUpdated);
       localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(conversationsWithCurrentUpdated));
       
-      // Update legacy storage for compatibility
       if (currentConversationId && messages.length > 0) {
         localStorage.setItem("ollama-chat-history", JSON.stringify(messages));
       }
       
-      console.log("💾 [SAVE] Conversations saved successfully");
+      if (conversations.length !== conversationsWithCurrentUpdated.length) {
+        setTimeout(() => {
+          setConversations(conversationsWithCurrentUpdated);
+        }, 0);
+      }
+      
+      setLastSaveTime(new Date().toISOString());
+      
     } catch (error) {
       console.error("❌ [SAVE] Error saving conversations:", error);
     }
-  }, [currentConversationId, messages, conversations, currentArtifacts.length, initialLoadComplete, artifacts]);
+  }, [currentConversationId, messages, conversations, currentArtifacts.length, artifacts, saveArtifacts]);
 
   const getStorageInfo = useCallback(() => {
     try {
@@ -1186,11 +1137,7 @@ export default function App() {
   }, [messages, initialLoadComplete]);
 
   const handleArtifactUpdate = useCallback((newArtifacts) => {
-    console.log("🔄 [DEBUG] handleArtifactUpdate called with:", newArtifacts.length, "artifacts");
-    console.log("🔄 [DEBUG] Current conversation ID:", currentConversationId);
-    
     if (!currentConversationId) {
-      console.error("❌ [DEBUG] No current conversation ID - creating new one");
       const newConvId = generateSafeId('conv');
       setCurrentConversationId(newConvId);
       
@@ -1199,64 +1146,43 @@ export default function App() {
         [newConvId]: deduplicated 
       };
       
-      console.log("🔄 [DEBUG] Setting artifacts with new conversation ID");
       setArtifacts(updatedArtifacts);
       
-      setTimeout(() => {
-        try {
-          saveArtifacts(updatedArtifacts);
-          console.log("💾 [DEBUG] Artifacts saved to localStorage with new conversation");
-        } catch (error) {
-          console.error("❌ [DEBUG] Error saving artifacts:", error);
-        }
-      }, 50);
+      saveArtifacts(updatedArtifacts);
+      
+      // Update conversation metadata
+      if (conversations.length > 0) {
+        const updatedConversations = conversations.map(conv => 
+          conv.id === newConvId 
+            ? { ...conv, artifactCount: deduplicated.length, lastUpdated: new Date().toISOString() }
+            : conv
+        );
+        localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
+      }
       return;
     }
     
-    // Remove duplicates before updating
     const deduplicated = deduplicateArtifacts(newArtifacts);
-    console.log("🔄 [DEBUG] After deduplication:", deduplicated.length, "artifacts");
     
     const updatedArtifacts = { 
       ...artifacts, 
       [currentConversationId]: deduplicated 
     };
     
-    console.log("🔄 [DEBUG] Setting artifacts state...");
     setArtifacts(updatedArtifacts);
     
-    // Force a state update to ensure UI refreshes
-    setTimeout(() => {
-      try {
-        saveArtifacts(updatedArtifacts);
-        console.log("💾 [DEBUG] Artifacts saved to localStorage");
-      } catch (error) {
-        console.error("❌ [DEBUG] Error saving artifacts:", error);
-      }
-    }, 50);
-  }, [artifacts, currentConversationId, saveArtifacts]);
-
-  // 🎯 FIXED: Single message saving useEffect with proper debouncing
-  useEffect(() => {
-    if (!initialLoadComplete || !currentConversationId || messages.length === 0) return;
+    saveArtifacts(updatedArtifacts);
     
-    // Clear any existing timeout
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
+    // Update conversation metadata
+    if (conversations.length > 0) {
+      const updatedConversations = conversations.map(conv => 
+        conv.id === currentConversationId 
+          ? { ...conv, artifactCount: deduplicated.length, lastUpdated: new Date().toISOString() }
+          : conv
+      );
+      localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
     }
-    
-    // Set a new timeout with longer debounce
-    saveTimeoutRef.current = setTimeout(() => {
-      console.log("💾 [AUTO-SAVE] Auto-saving conversation after message change");
-      saveConversations(conversations);
-    }, 1000); // Increased to 1 second for better debouncing
-    
-    return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-    };
-  }, [messages, currentConversationId, conversations, initialLoadComplete, saveConversations]);
+  }, [artifacts, currentConversationId, saveArtifacts, conversations]);
 
   useEffect(() => {
     if (!initialLoadComplete) return;
@@ -1264,41 +1190,18 @@ export default function App() {
     localStorage.setItem("ollama-additional-system-prompt", systemPrompt);
   }, [systemPrompt, initialLoadComplete]);
 
-  // 🎯 FIXED: Conversation changes saving
-  useEffect(() => {
-    if (!initialLoadComplete || conversations.length === 0) return;
-    
-    // Use a debounce for conversation changes
-    const timer = setTimeout(() => {
-      console.log("💾 [CONVO-CHANGE] Saving conversation changes");
-      saveConversations(conversations, true); // Force save for conversation changes
-    }, 500);
-    
-    return () => clearTimeout(timer);
-  }, [conversations, initialLoadComplete, saveConversations]);
-
-  // 🎯 FIXED: Properly initialize when conversation loads
   useEffect(() => {
     if (!initialLoadComplete || !currentConversationId) return;
     
-    console.log("🔄 [CONVO] Current conversation changed:", currentConversationId);
-    console.log("🔄 [CONVO] Available artifacts for this conversation:", 
-      artifacts[currentConversationId]?.length || 0, "files");
-    
-    // If this conversation has artifacts, don't show empty state
     if (artifacts[currentConversationId] && artifacts[currentConversationId].length > 0) {
-      console.log("🔄 [CONVO] Conversation has artifacts, hiding empty state");
       setShowEmptyState(false);
       
-      // Auto-show artifacts panel if there are files
       const savedPreference = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.SHOW_ARTIFACTS);
       const shouldShow = savedPreference === null ? true : savedPreference === 'true';
       if (shouldShow && !showArtifacts) {
-        console.log("🔄 [CONVO] Auto-showing artifacts panel");
         setShowArtifacts(true);
       }
     } else {
-      console.log("🔄 [CONVO] Conversation has no artifacts, showing empty state");
       setShowEmptyState(true);
     }
   }, [currentConversationId, artifacts, initialLoadComplete, showArtifacts]);
@@ -1312,7 +1215,6 @@ export default function App() {
     };
   }, []);
 
-  // Close create menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (createMenuRef.current && !createMenuRef.current.contains(event.target)) {
@@ -1326,12 +1228,18 @@ export default function App() {
     }
   }, [showCreateMenu]);
 
-  // Focus folder input when creating folder
   useEffect(() => {
     if (creatingFolder && folderInputRef.current) {
       folderInputRef.current.focus();
     }
   }, [creatingFolder]);
+
+  // 🎯 SAVE ON MESSAGES CHANGE
+  useEffect(() => {
+    if (initialLoadComplete && currentConversationId && messages.length > 0) {
+      saveConversations();
+    }
+  }, [messages, currentConversationId, initialLoadComplete, saveConversations]);
 
   // 🎯 SCROLL HANDLING
   const handleScroll = useCallback(() => {
@@ -1411,8 +1319,6 @@ export default function App() {
   }, [currentConversationId, artifacts, saveArtifacts]);
 
   const createNewConversation = useCallback(() => {
-    console.log("🔄 [NEW] Creating new conversation...");
-    
     const newConversation = {
       id: generateSafeId('conv'),
       title: 'New Conversation',
@@ -1422,16 +1328,18 @@ export default function App() {
       artifactCount: 0
     };
     
-    // Deactivate all other conversations
-    const updatedConversations = conversations.map(conv => ({ 
+    const savedConversations = JSON.parse(localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS) || '[]');
+    
+    const updatedConversations = savedConversations.map(conv => ({ 
       ...conv, 
       active: false 
     }));
     
-    // Add the new conversation at the beginning
     updatedConversations.unshift(newConversation);
     
-    // Update states
+    localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
+    localStorage.setItem("ollama-chat-history", JSON.stringify([]));
+    
     setConversations(updatedConversations);
     setCurrentConversationId(newConversation.id);
     setMessages([]);
@@ -1441,52 +1349,38 @@ export default function App() {
     setShowArtifacts(false);
     setShowEmptyState(true);
     
-    // Update artifacts for the new conversation
     const updatedArtifacts = { ...artifacts, [newConversation.id]: [] };
     setArtifacts(updatedArtifacts);
-    
-    // Save everything
-    localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
-    localStorage.setItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS, JSON.stringify(updatedArtifacts));
-    localStorage.setItem("ollama-chat-history", JSON.stringify([]));
-    
-    console.log("🔄 [NEW] Created new conversation:", newConversation.id);
-  }, [conversations, artifacts]);
+    saveArtifacts(updatedArtifacts);
+  }, [artifacts, saveArtifacts]);
 
-  // 🎯 FIXED: selectConversation function
   const selectConversation = useCallback((conversation) => {
-    console.log("🔄 [SELECT] Selecting conversation:", conversation.id);
-    
-    // Save current conversation state if it exists
     if (currentConversationId && messages.length > 0) {
-      saveConversations(conversations);
+      saveConversations();
     }
     
-    // Update all conversations to set active state
-    const updatedConversations = conversations.map(conv => ({ 
+    const savedConversations = JSON.parse(localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS) || '[]');
+    
+    const updatedConversations = savedConversations.map(conv => ({ 
       ...conv, 
       active: conv.id === conversation.id 
     }));
     
+    localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
+    
     setConversations(updatedConversations);
     setCurrentConversationId(conversation.id);
     
-    // Load messages for selected conversation
     const conversationMessages = conversation.messages || [];
-    console.log("🔄 [SELECT] Loading messages:", conversationMessages.length);
     setMessages(conversationMessages);
     
-    // Update legacy storage for compatibility
     localStorage.setItem("ollama-chat-history", JSON.stringify(conversationMessages));
     
-    // Reset UI
     setImageFile(null);
     setImagePreview(null);
     setShowSidePanel(false);
     
-    // Check artifacts for this conversation
     const conversationArtifacts = artifacts[conversation.id] || [];
-    console.log("🔄 [SELECT] Conversation artifacts:", conversationArtifacts.length);
     
     if (conversationArtifacts.length > 0) {
       const savedPreference = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.SHOW_ARTIFACTS);
@@ -1497,11 +1391,6 @@ export default function App() {
       setShowArtifacts(false);
       setShowEmptyState(true);
     }
-    
-    // Save the updated conversations
-    localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
-    
-    console.log("🔄 [SELECT] Selection complete");
   }, [conversations, currentConversationId, messages, artifacts, saveConversations]);
 
   const deleteConversation = useCallback((conversationId) => {
@@ -1521,31 +1410,39 @@ export default function App() {
     setArtifacts(updatedArtifacts);
     saveArtifacts(updatedArtifacts);
     
-    setConversations(prev => {
-      const updated = prev.filter(conv => conv.id !== conversationId);
+    const savedConversations = JSON.parse(localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS) || '[]');
+    
+    const updated = savedConversations.filter(conv => conv.id !== conversationId);
+    
+    if (isDeletingCurrent && updated.length > 0) {
+      const nextConv = updated[0];
+      setCurrentConversationId(nextConv.id);
+      setMessages(nextConv.messages || []);
       
-      if (isDeletingCurrent && updated.length > 0) {
-        const nextConv = updated[0];
-        setCurrentConversationId(nextConv.id);
-        setMessages(nextConv.messages || []);
-        return updated.map((conv, idx) => ({ ...conv, active: idx === 0 }));
-      } else if (isDeletingCurrent) {
-        setCurrentConversationId(null);
-      }
+      const updatedWithActive = updated.map((conv, idx) => ({ 
+        ...conv, 
+        active: idx === 0 
+      }));
       
-      return updated;
-    });
+      localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedWithActive));
+      setConversations(updatedWithActive);
+    } else if (isDeletingCurrent) {
+      setCurrentConversationId(null);
+      localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updated));
+      setConversations(updated);
+    } else {
+      localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updated));
+      setConversations(updated);
+    }
   }, [currentConversationId, artifacts, saveArtifacts]);
 
   const clearAllConversations = useCallback(() => {
     if (!confirm("Clear all conversations? This cannot be undone.")) return;
     
-    // Clear localStorage first
     localStorage.removeItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS);
     localStorage.removeItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS);
     localStorage.removeItem("ollama-chat-history");
     
-    // Reset all state
     setConversations([]);
     setMessages([]);
     setCurrentConversationId(null);
@@ -1554,10 +1451,8 @@ export default function App() {
     setShowEmptyState(true);
     
     setArtifacts({});
-    saveArtifacts({}); // This will save the empty state
+    saveArtifacts({});
     
-    // Don't create a new conversation automatically
-    // The user can create one when they're ready
     setShowSidePanel(false);
     setShowArtifacts(false);
   }, [saveArtifacts]);
@@ -1586,7 +1481,10 @@ export default function App() {
         reader.onload = (event) => {
           try {
             const imported = JSON.parse(event.target.result);
-            if (imported.conversations) setConversations(imported.conversations);
+            if (imported.conversations) {
+              localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(imported.conversations));
+              setConversations(imported.conversations);
+            }
             if (imported.artifacts) {
               setArtifacts(imported.artifacts);
               saveArtifacts(imported.artifacts);
@@ -1637,18 +1535,14 @@ export default function App() {
   
       setModels({ cloud: cloudModels, nonCloud: nonCloudModels });
       
-      // Check for saved model first
       const savedModel = localStorage.getItem("ollama-selected-model");
       let modelToSelect = "";
       
       if (savedModel && modelNames.includes(savedModel)) {
-        // If saved model exists in the list, use it
         modelToSelect = savedModel;
       } else if (cloudModels.length > 0) {
-        // Otherwise default to first cloud model
         modelToSelect = cloudModels[0];
       } else if (nonCloudModels.length > 0) {
-        // Or first non-cloud model
         modelToSelect = nonCloudModels[0];
       }
       setSelectedModel(modelToSelect);
@@ -1672,7 +1566,7 @@ export default function App() {
     return getEnhancedFileContext(currentArtifacts, input, currentEdits);
   }, [currentArtifacts, input, currentEdits, getEnhancedFileContext]);
 
-  // 🎯 CREATE NEW FILE FUNCTION - FIXED VERSION
+  // 🎯 CREATE NEW FILE FUNCTION
   const handleCreateNewFile = useCallback((folderPath = '') => {
     const defaultExtensions = {
       'src/components': '.jsx',
@@ -1748,9 +1642,20 @@ if __name__ == "__main__":
     };
     
     const updatedArtifacts = [...currentArtifacts, newFile];
-    handleArtifactUpdate(updatedArtifacts);
     
-    // Set as selected and open for editing
+    // 🎯 SAVE IMMEDIATELY
+    setArtifacts(prev => ({ 
+      ...prev, 
+      [currentConversationId]: updatedArtifacts 
+    }));
+    
+    const updatedArtifactsObj = { 
+      ...artifacts, 
+      [currentConversationId]: updatedArtifacts 
+    };
+    
+    saveArtifacts(updatedArtifactsObj);
+    
     setTimeout(() => {
       setSelectedFile(newFile);
       setEditedContent(newFile.content);
@@ -1759,24 +1664,13 @@ if __name__ == "__main__":
       if (isMobile) setMobilePanel('editor');
     }, 100);
     
-    // Expand folder if created inside one
     if (folderPath) {
       setExpandedFolders(prev => new Set(prev).add(folderPath));
     }
     
-    // Close create menu
     setShowCreateMenu(false);
     setShowEmptyState(false);
-  }, [currentArtifacts, handleArtifactUpdate, isMobile]);
-
-  // 🎯 SELECTED FILE STATE (for ArtifactManager)
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editedContent, setEditedContent] = useState('');
-  const [expandedFolders, setExpandedFolders] = useState(new Set());
-  const [searchTerm, setSearchTerm] = useState('');
-  const [viewMode, setViewMode] = useState('editor');
-  const [mobilePanel, setMobilePanel] = useState('tree');
+  }, [currentArtifacts, currentConversationId, artifacts, saveArtifacts, isMobile]);
 
   // 🎯 CREATE NEW FOLDER FUNCTION
   const handleCreateNewFolder = useCallback((parentPath = '') => {
@@ -1789,7 +1683,6 @@ if __name__ == "__main__":
     const sanitizedName = newFolderName.trim().replace(/[<>:"/\\|?*]/g, '');
     const folderPath = parentPath ? `${parentPath}/${sanitizedName}` : sanitizedName;
     
-    // Create a dummy file inside the folder to represent it in the tree
     const dummyFile = {
       path: `${folderPath}/.keep`,
       content: '# Folder placeholder',
@@ -1803,59 +1696,60 @@ if __name__ == "__main__":
     };
     
     const updatedArtifacts = [...currentArtifacts, dummyFile];
-    handleArtifactUpdate(updatedArtifacts);
     
-    // Expand the parent folder
+    // 🎯 SAVE IMMEDIATELY
+    setArtifacts(prev => ({ 
+      ...prev, 
+      [currentConversationId]: updatedArtifacts 
+    }));
+    
+    const updatedArtifactsObj = { 
+      ...artifacts, 
+      [currentConversationId]: updatedArtifacts 
+    };
+    
+    saveArtifacts(updatedArtifactsObj);
+    
     if (parentPath) {
       setExpandedFolders(prev => new Set(prev).add(parentPath));
     }
     
-    // Reset state
     setCreatingFolder(false);
     setNewFolderName('');
     setShowCreateMenu(false);
     setShowEmptyState(false);
-  }, [currentArtifacts, handleArtifactUpdate, newFolderName]);
+  }, [currentArtifacts, currentConversationId, artifacts, saveArtifacts, newFolderName]);
 
-  // 🎯 INITIAL LOAD - FIXED VERSION
+  // 🎯 INITIAL LOAD
   useEffect(() => {
     if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
     
     loadTimerRef.current = setTimeout(() => {
       try {
-        console.log("🔄 [LOAD] Starting initial load...");
-        
-        // Load conversations FIRST
         const savedConversations = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS);
-        console.log("🔄 [LOAD] Saved conversations found:", savedConversations ? "YES" : "NO");
         
         let loadedConversations = [];
         if (savedConversations) {
           try {
             loadedConversations = JSON.parse(savedConversations);
-            console.log("🔄 [LOAD] Parsed conversations:", loadedConversations.length);
           } catch (error) {
             console.error("❌ [LOAD] Error parsing conversations:", error);
             loadedConversations = [];
           }
         }
         
-        // Load artifacts
         const savedArtifacts = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS);
         let loadedArtifacts = {};
         if (savedArtifacts) {
           try {
             loadedArtifacts = JSON.parse(savedArtifacts);
-            console.log("🔄 [LOAD] Loaded artifacts for", Object.keys(loadedArtifacts).length, "conversations");
           } catch (error) {
             console.error("❌ [LOAD] Error parsing artifacts:", error);
             loadedArtifacts = {};
           }
         }
         
-        // If no conversations exist, create a default one
         if (loadedConversations.length === 0) {
-          console.log("🔄 [LOAD] No conversations found, creating default...");
           const newConvId = generateSafeId('conv');
           const defaultConversation = {
             id: newConvId,
@@ -1869,38 +1763,27 @@ if __name__ == "__main__":
           loadedConversations = [defaultConversation];
           loadedArtifacts[newConvId] = [];
           
-          // Save the new default conversation
           localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(loadedConversations));
           localStorage.setItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS, JSON.stringify(loadedArtifacts));
-          
-          console.log("🔄 [LOAD] Created default conversation:", newConvId);
         }
         
-        // Set the active conversation (first active one or first in list)
         const activeConv = loadedConversations.find(c => c.active) || loadedConversations[0];
         const activeConvId = activeConv?.id;
         
-        console.log("🔄 [LOAD] Setting active conversation:", activeConvId);
-        
-        // Set states
         setConversations(loadedConversations);
         setArtifacts(loadedArtifacts);
         setCurrentConversationId(activeConvId);
         
-        // Load messages for active conversation
         if (activeConv && activeConv.messages) {
-          console.log("🔄 [LOAD] Loading messages for active conversation:", activeConv.messages.length);
           setMessages(activeConv.messages);
         }
         
-        // Load other settings
         const savedPrompt = localStorage.getItem("ollama-additional-system-prompt");
         if (savedPrompt) setSystemPrompt(savedPrompt);
         
         const savedModel = localStorage.getItem("ollama-selected-model");
         if (savedModel) setSelectedModel(savedModel);
         
-        // Check if we should show artifacts
         const conversationArtifacts = loadedArtifacts[activeConvId] || [];
         if (conversationArtifacts.length > 0) {
           const savedPreference = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.SHOW_ARTIFACTS);
@@ -1912,12 +1795,10 @@ if __name__ == "__main__":
           setShowEmptyState(true);
         }
         
-        console.log("🔄 [LOAD] Initial load complete");
         setInitialLoadComplete(true);
         
       } catch (error) {
         console.error("❌ [LOAD] Initial load error:", error);
-        // Create a fresh state on error
         createNewConversation();
         setInitialLoadComplete(true);
       }
@@ -1927,8 +1808,17 @@ if __name__ == "__main__":
       if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
     };
   }, []);
+
+  // 🎯 FETCH MODELS ON MOUNT
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchModels();
+    }, 200);
+    
+    return () => clearTimeout(timer);
+  }, []);
   
-  // 🎯 FIXED STREAMING FUNCTION - WITH AUTOMATIC ARTIFACT ADDITION
+  // 🎯 FIXED STREAMING FUNCTION
   const sendMessage = useCallback(async () => {
     const trimmedInput = input.trim();
     if ((!trimmedInput && !imageFile) || isLoading) return;
@@ -1937,7 +1827,6 @@ if __name__ == "__main__":
 
     if (!currentConversationId && conversations.length === 0) createNewConversation();
 
-    // Prepare file context
     const fileContext = getFileContext();
     const combinedSystemPrompt = systemPrompt.trim() ? 
       `${DEFAULT_SYSTEM_PROMPT}\n\n${fileContext}\n\nAdditional instructions:\n${systemPrompt.trim()}` : 
@@ -1959,7 +1848,6 @@ if __name__ == "__main__":
       timestamp: new Date().toISOString() 
     };
 
-    // Create new messages array with both messages
     const messagesWithNew = [...messages, userMessage, assistantMessage];
     setMessages(messagesWithNew);
     setInput("");
@@ -1993,7 +1881,7 @@ if __name__ == "__main__":
       let buffer = "";
       let fullContent = "";
       let lastUpdateTime = 0;
-      const UPDATE_INTERVAL = 16; // ~60 FPS for smooth streaming
+      const UPDATE_INTERVAL = 16;
 
       const updateMessageContent = (content) => {
         setMessages(prev => prev.map(m => 
@@ -2020,7 +1908,6 @@ if __name__ == "__main__":
             if (json.message?.content) { 
               fullContent += json.message.content;
               
-              // Update immediately for smooth streaming
               const now = Date.now();
               if (now - lastUpdateTime > UPDATE_INTERVAL || fullContent.length % 3 === 0) {
                 updateMessageContent(fullContent);
@@ -2031,33 +1918,20 @@ if __name__ == "__main__":
         }
       }
 
-      // Final update with complete content
       updateMessageContent(fullContent);
 
       const parsedResponse = parseLLMResponse(fullContent);
       
-      console.log("📦 [DEBUG] Parsed artifacts from AI:", parsedResponse.artifacts.length, "files");
-      console.log("📦 [DEBUG] Current artifacts before:", currentArtifacts.length);
-      
-      // CRITICAL FIX: Process artifacts BEFORE updating the message
       if (parsedResponse.artifacts.length > 0) {
-        console.log("📦 [DEBUG] Processing artifacts...");
-        
-        // First, create enhanced artifacts with proper structure
         const enhancedArtifacts = parsedResponse.artifacts.map(artifact => {
-          // Check if this artifact already exists in current artifacts
           const isDuplicate = currentArtifacts.some(existing => 
             existing.path === artifact.path || 
             (existing.content && artifact.content && existing.content === artifact.content)
           );
           
           if (isDuplicate) {
-            // Skip duplicates
-            console.log(`📦 [DEBUG] Skipping duplicate artifact: ${artifact.path}`);
             return null;
           }
-          
-          console.log(`📦 [DEBUG] Adding new artifact: ${artifact.path}`);
           
           return {
             ...artifact,
@@ -2065,39 +1939,28 @@ if __name__ == "__main__":
             type: 'file',
             createdBy: 'ai',
             timestamp: new Date().toISOString(),
-            addedToProject: true, // Mark as added
+            addedToProject: true,
             source: artifact.source || 'parsed'
           };
-        }).filter(Boolean); // Remove null entries (duplicates)
+        }).filter(Boolean);
       
-        console.log("📦 [DEBUG] Enhanced artifacts to add:", enhancedArtifacts.length);
-      
-        // Add to current artifacts if we have any new files
         if (enhancedArtifacts.length > 0) {
           const updatedArtifacts = [...currentArtifacts, ...enhancedArtifacts];
-          console.log("📦 [DEBUG] Updated artifacts total will be:", updatedArtifacts.length);
-          console.log("📦 [DEBUG] First artifact:", enhancedArtifacts[0]?.path);
           
-          // 🎯 CRITICAL: Call the update function
           handleArtifactUpdate(updatedArtifacts);
           
-          // Auto-show artifacts panel when files are generated
           if (!showArtifacts && enhancedArtifacts.length > 0) {
-            console.log("📦 [DEBUG] Auto-showing artifacts panel");
             setShowArtifacts(true);
             localStorage.setItem(APP_CONFIG.STORAGE_KEYS.SHOW_ARTIFACTS, 'true');
           }
           
           setShowEmptyState(false);
           
-          // Update the parsedResponse to mark artifacts as added
           parsedResponse.artifacts = enhancedArtifacts.map(art => ({
             ...art,
             addedToProject: true
           }));
         } else {
-          // No new artifacts were added (all were duplicates)
-          console.log("📦 [DEBUG] No new artifacts to add (all duplicates)");
           parsedResponse.artifacts = parsedResponse.artifacts.map(artifact => ({
             ...artifact,
             addedToProject: false,
@@ -2106,9 +1969,6 @@ if __name__ == "__main__":
         }
       }
       
-      console.log("📦 [DEBUG] Current conversation ID:", currentConversationId);
-      
-      // In the sendMessage function, after processing the response, add:
       const finalMessages = messagesWithNew.map(m => 
         m.id === assistantMessage.id ? { 
           ...m, 
@@ -2120,11 +1980,8 @@ if __name__ == "__main__":
       
       setMessages(finalMessages);
       
-      // 🚨 CRITICAL: Save the conversation after message is complete
-      setTimeout(() => {
-        console.log("💾 [SEND] Saving conversation after message completion");
-        saveConversations(conversations, true); // Force save
-      }, 100);
+      // 🎯 SAVE IMMEDIATELY after messages change
+      saveConversations();
       
     } catch (err) {
       if (err.name === "AbortError") { 
@@ -2336,7 +2193,7 @@ if __name__ == "__main__":
                 <div className="artifacts-header">
                   <div className="artifacts-title">
                     <FileText size={16} />
-                    <span>Generated Files ({parsedResponse.artifacts.length})</span>
+                    <span>Generated Files</span>
                     {parsedResponse.artifacts.some(a => a.addedToProject) && (
                       <span className="added-badge">
                         <Check size={14} />
@@ -2347,7 +2204,6 @@ if __name__ == "__main__":
                 </div>
                 <div className="artifacts-list">
                   {parsedResponse.artifacts.slice(0, 5).map((artifact) => {
-                    // Check if already in project
                     const isInProject = artifact.addedToProject || currentArtifacts.some(a => 
                       a.path === artifact.path || 
                       (a.content && artifact.content && a.content === artifact.content)
@@ -2392,10 +2248,8 @@ if __name__ == "__main__":
                                   setShowArtifacts(true);
                                   setShowEmptyState(false);
                                   
-                                  // Update the artifact in the message to show it's added
                                   artifact.addedToProject = true;
                                   
-                                  // Force re-render
                                   setTimeout(() => {
                                     setMessages(prev => prev.map(msg => 
                                       msg.id === message.id ? {
@@ -2416,12 +2270,7 @@ if __name__ == "__main__":
                                 <Plus size={14} />
                                 Add
                               </button>
-                            ) : (
-                              <span className="added-check" title="Already in project">
-                                <Check size={14} />
-                                Added
-                              </span>
-                            )}
+                            ) : null}
                             <button 
                               onClick={() => navigator.clipboard.writeText(artifact.content)}
                               className="copy-artifact-btn"
@@ -2663,13 +2512,12 @@ if __name__ == "__main__":
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef(null);
     const [internalShowUnrecommended, setInternalShowUnrecommended] = useState(false);
-  
-    // Use a local state to avoid triggering parent re-render
+
     const closeDropdown = useCallback(() => { 
       setIsOpen(false); 
       setInternalShowUnrecommended(false);
     }, []);
-  
+
     useEffect(() => {
       const handleClickOutside = (e) => {
         if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
@@ -2682,16 +2530,16 @@ if __name__ == "__main__":
         return () => document.removeEventListener('mousedown', handleClickOutside);
       }
     }, [isOpen, closeDropdown]);
-  
+
     const displayName = 
       typeof selectedModel === "string" && selectedModel
         ? selectedModel.split(":")[0]
         : "Select model";
-  
+
     return (
       <div className="model-dropdown-wrapper" ref={dropdownRef}>
         <button
-          className={`model-dropdown-trigger ${isOpen ? "open" : ""}`}
+          className={`model-dropdown-trigger ${isOpen ? "open" : ""} ${!selectedModel ? "no-model" : ""}`}
           onClick={() => {
             if (!isLoadingModels) {
               setIsOpen(prev => !prev);
@@ -2703,13 +2551,21 @@ if __name__ == "__main__":
           }
         >
           <div className="model-trigger-content">
-            <span className="model-trigger-text">
-              {isLoadingModels ? "Loading..." : displayName}
-            </span>
-            <ChevronDown size={14} className="dropdown-chevron" />
+            {isLoadingModels ? (
+              <div className="model-loading-indicator">
+                <span>Loading...</span>
+              </div>
+            ) : (
+              <>
+                <span className="model-trigger-text">
+                  {selectedModel ? displayName : "Select model"}
+                </span>
+                <ChevronDown size={14} className="dropdown-chevron" />
+              </>
+            )}
           </div>
         </button>
-  
+
         <AnimatePresence>
           {isOpen && (
             <motion.div
@@ -2719,79 +2575,97 @@ if __name__ == "__main__":
               exit={{ opacity: 0, scale: 0.95, y: -8 }}
               onMouseDown={(e) => e.preventDefault()}
             >
-              {models.cloud.length > 0 && (
-                <div className="model-section">
-                  <div className="model-section-title">Recommended Models</div>
-                  {models.cloud.slice(0, 10).map((model) => (
-                    <button
-                      key={`model-cloud-${model}`}
-                      className={`model-menu-item ${
-                        selectedModel === model ? "selected" : ""
-                      }`}
-                      onClick={() => {
-                        setSelectedModel(model);
-                        saveSelectedModel(model);
-                        setIsOpen(false);
-                        setInternalShowUnrecommended(false);
-                      }}
-                      onMouseDown={(e) => e.preventDefault()}
-                    >
-                      <span className="model-item-text">{model}</span>
-                      {selectedModel === model && (
-                        <Check size={14} className="model-check" />
-                      )}
-                    </button>
-                  ))}
+              {isLoadingModels ? (
+                <div className="model-dropdown-loading">
+                  <span>Loading models...</span>
                 </div>
-              )}
-  
-              {models.nonCloud.length > 0 && (
-                <div className="model-section">
-                  <button
-                    className="model-menu-group"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setInternalShowUnrecommended((prev) => !prev);
-                    }}
-                    onMouseDown={(e) => e.preventDefault()}
-                  >
-                    <span>Other Models</span>
-                    <span className="group-arrow">
-                      {internalShowUnrecommended ? "−" : "+"}
-                    </span>
-                  </button>
-  
-                  {internalShowUnrecommended &&
-                    models.nonCloud.slice(0, 10).map((model) => (
+              ) : (
+                <>
+                  {models.cloud.length > 0 && (
+                    <div className="model-section">
+                      <div className="model-section-title">Recommended Models</div>
+                      {models.cloud.slice(0, 10).map((model) => (
+                        <button
+                          key={`model-cloud-${model}`}
+                          className={`model-menu-item ${
+                            selectedModel === model ? "selected" : ""
+                          }`}
+                          onClick={() => {
+                            setSelectedModel(model);
+                            saveSelectedModel(model);
+                            setIsOpen(false);
+                            setInternalShowUnrecommended(false);
+                          }}
+                          onMouseDown={(e) => e.preventDefault()}
+                        >
+                          <span className="model-item-text">{model}</span>
+                          {selectedModel === model && (
+                            <Check size={14} className="model-check" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {models.nonCloud.length > 0 && (
+                    <div className="model-section">
                       <button
-                        key={`model-noncloud-${model}`}
-                        className={`model-menu-item model-menu-item-unrecommended ${
-                          selectedModel === model ? "selected" : ""
-                        }`}
+                        className="model-menu-group"
                         onClick={(e) => {
                           e.preventDefault();
-                          setSelectedModel(model);
-                          saveSelectedModel(model);
-                          setIsOpen(false);
-                          setInternalShowUnrecommended(false);
+                          e.stopPropagation();
+                          setInternalShowUnrecommended((prev) => !prev);
                         }}
                         onMouseDown={(e) => e.preventDefault()}
                       >
-                        <span className="model-item-text">{model}</span>
-                        {selectedModel === model && (
-                          <Check size={14} className="model-check" />
-                        )}
+                        <span>Other Models ({models.nonCloud.length})</span>
+                        <span className="group-arrow">
+                          {internalShowUnrecommended ? "−" : "+"}
+                        </span>
                       </button>
-                    ))}
-                </div>
-              )}
-  
-              {models.cloud.length === 0 && models.nonCloud.length === 0 && (
-                <div className="model-empty-state">
-                  <div className="model-empty-icon">🤖</div>
-                  <div className="model-empty-text">No models available</div>
-                </div>
+
+                      {internalShowUnrecommended &&
+                        models.nonCloud.slice(0, 10).map((model) => (
+                          <button
+                            key={`model-noncloud-${model}`}
+                            className={`model-menu-item model-menu-item-unrecommended ${
+                              selectedModel === model ? "selected" : ""
+                            }`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setSelectedModel(model);
+                              saveSelectedModel(model);
+                              setIsOpen(false);
+                              setInternalShowUnrecommended(false);
+                            }}
+                            onMouseDown={(e) => e.preventDefault()}
+                          >
+                            <span className="model-item-text">{model}</span>
+                            {selectedModel === model && (
+                              <Check size={14} className="model-check" />
+                            )}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+
+                  {models.cloud.length === 0 && models.nonCloud.length === 0 && (
+                    <div className="model-empty-state">
+                      <div className="model-empty-icon">🤖</div>
+                      <div className="model-empty-text">No models available</div>
+                      <button 
+                        onClick={() => {
+                          setIsOpen(false);
+                          setOllamaError("Please make sure Ollama is running and you have models installed.");
+                          fetchModels();
+                        }}
+                        className="model-retry-button"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </motion.div>
           )}
@@ -2829,13 +2703,11 @@ if __name__ == "__main__":
             backupData = JSON.parse(data);
             
             if (backupData && backupData.type === 'complete-backup') {
-              // New format with conversations and artifacts
               version = backupData.version || '3.0';
               conversationCount = backupData.conversations?.length || 0;
               artifactCount = backupData.metadata?.totalFiles || 0;
               isValid = true;
             } else if (backupData && typeof backupData === 'object') {
-              // Old format - just artifacts
               version = '1.0';
               conversationCount = Object.keys(backupData).length;
               artifactCount = Object.values(backupData).reduce((sum, files) => sum + files.length, 0);
@@ -2860,7 +2732,6 @@ if __name__ == "__main__":
           };
         }).filter(backup => backup.isValid);
         
-        console.log("📦 [BACKUP] Loaded backups:", backupList.length);
         setBackups(backupList);
       } catch (error) {
         console.error('Error loading backups:', error);
@@ -2960,18 +2831,13 @@ if __name__ == "__main__":
       setRestoring(true);
       
       try {
-        console.log("🔄 [RESTORE] Starting backup restoration:", backup.key);
-        
         if (backup.version === '3.0' && backup.backupData.type === 'complete-backup') {
-          // New format - restore conversations AND artifacts
           const { conversations: backupConversations, artifacts: backupArtifacts } = backup.backupData;
           
           if (backupConversations && Array.isArray(backupConversations)) {
-            console.log("🔄 [RESTORE] Restoring conversations:", backupConversations.length);
             setConversations(backupConversations);
             localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(backupConversations));
             
-            // Set the first conversation as active
             if (backupConversations.length > 0) {
               const activeConv = backupConversations.find(c => c.active) || backupConversations[0];
               setCurrentConversationId(activeConv.id);
@@ -2981,20 +2847,16 @@ if __name__ == "__main__":
           }
           
           if (backupArtifacts && typeof backupArtifacts === 'object') {
-            console.log("🔄 [RESTORE] Restoring artifacts:", Object.keys(backupArtifacts).length, "conversations");
             const fixedArtifacts = fixCorruptedArtifacts(backupArtifacts);
             setArtifacts(fixedArtifacts);
             saveArtifacts(fixedArtifacts);
           }
         } else {
-          // Old format - just artifacts
-          console.log("🔄 [RESTORE] Restoring old format backup");
           const fixedArtifacts = fixCorruptedArtifacts(backup.backupData);
           setArtifacts(fixedArtifacts);
           saveArtifacts(fixedArtifacts);
         }
         
-        // Reload backups list
         setTimeout(() => {
           loadBackups();
           setStorageInfo(getStorageInfo());
@@ -3021,7 +2883,6 @@ if __name__ == "__main__":
             return;
           }
           
-          // Validate the backup
           if (!importedData.conversations || !Array.isArray(importedData.conversations)) {
             alert('Invalid backup: missing conversations data');
             return;
@@ -3032,11 +2893,9 @@ if __name__ == "__main__":
             return;
           }
           
-          // Store as a new backup
           const backupKey = `${APP_CONFIG.STORAGE_KEYS.BACKUP_PREFIX}${Date.now()}`;
           localStorage.setItem(backupKey, JSON.stringify(importedData));
           
-          // Reload backups list
           loadBackups();
           setImportFile(null);
           setShowImportDialog(false);
@@ -3363,7 +3222,7 @@ if __name__ == "__main__":
                         </div>
                       </div>
                     ))}
-                  </div>
+                </div>
                 )}
                 
                 <div className="backups-info">
@@ -3452,7 +3311,6 @@ if __name__ == "__main__":
                   </div>
                 ) : (
                   conversations.slice(0, 20).map((conv) => {
-                    // Generate a title from messages if not set
                     const conversationTitle = conv.title || 
                       (conv.messages?.length > 0 
                         ? (conv.messages[0]?.content?.substring(0, 50) + (conv.messages[0]?.content?.length > 50 ? '...' : ''))
@@ -3643,14 +3501,10 @@ if __name__ == "__main__":
   const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
     const debouncedSearchTerm = useDebounce(searchTerm, APP_CONFIG.TIMEOUTS.DEBOUNCE_DELAY);
   
-    // 🎯 FIX: Add a key to force re-render when artifacts change
     const artifactKey = useMemo(() => 
       `artifacts-${currentArtifacts.length}-${Date.now()}`,
       [currentArtifacts]
     );
-  
-    console.log("📁 [DEBUG] ArtifactManager rendering with:", currentArtifacts.length, "artifacts");
-    console.log("📁 [DEBUG] Current conversation ID:", currentConversationId);
   
     const toggleFolder = useCallback((folderPath, e) => {
       if (e) e.stopPropagation();
@@ -3664,7 +3518,6 @@ if __name__ == "__main__":
   
     const handleFileSelect = useCallback((file, e) => {
       if (e) e.stopPropagation();
-      console.log("📁 [DEBUG] File selected:", file.path);
       setSelectedFile(file);
       setEditedContent(file.content);
       setIsEditing(false);
@@ -3675,15 +3528,27 @@ if __name__ == "__main__":
   
     const handleSave = useCallback(() => {
       if (selectedFile) {
-        console.log("📁 [DEBUG] Saving file:", selectedFile.path);
         const updatedArtifacts = currentArtifacts.map(art => 
           art.path === selectedFile.path ? { ...art, content: editedContent } : art
         );
-        handleArtifactUpdate(updatedArtifacts);
+        
+        // 🎯 SAVE IMMEDIATELY
+        setArtifacts(prev => ({ 
+          ...prev, 
+          [currentConversationId]: updatedArtifacts 
+        }));
+        
+        const updatedArtifactsObj = { 
+          ...artifacts, 
+          [currentConversationId]: updatedArtifacts 
+        };
+        
+        saveArtifacts(updatedArtifactsObj);
+        
         setIsEditing(false);
         setShowEmptyState(false);
       }
-    }, [selectedFile, editedContent, currentArtifacts, handleArtifactUpdate]);
+    }, [selectedFile, editedContent, currentArtifacts, currentConversationId, artifacts, saveArtifacts]);
   
     const handleCancelEdit = useCallback(() => {
       if (selectedFile) setEditedContent(selectedFile.content);
@@ -3694,9 +3559,20 @@ if __name__ == "__main__":
       if (e) e.stopPropagation();
       if (!confirm(`Are you sure you want to delete "${filePath}"?\n\nThis will remove the file from your project and cannot be undone.`)) return;
       
-      console.log("📁 [DEBUG] Deleting file:", filePath);
       const updatedArtifacts = currentArtifacts.filter(art => art.path !== filePath);
-      handleArtifactUpdate(updatedArtifacts);
+      
+      // 🎯 SAVE IMMEDIATELY
+      setArtifacts(prev => ({ 
+        ...prev, 
+        [currentConversationId]: updatedArtifacts 
+      }));
+      
+      const updatedArtifactsObj = { 
+        ...artifacts, 
+        [currentConversationId]: updatedArtifacts 
+      };
+      
+      saveArtifacts(updatedArtifactsObj);
       
       if (selectedFile?.path === filePath) {
         setSelectedFile(null);
@@ -3707,17 +3583,14 @@ if __name__ == "__main__":
       if (updatedArtifacts.length === 0) {
         setShowEmptyState(true);
       }
-    }, [currentArtifacts, selectedFile, handleArtifactUpdate, isMobile]);
+    }, [currentArtifacts, selectedFile, currentConversationId, artifacts, saveArtifacts, isMobile]);
   
     const fileTree = useMemo(() => {
-      console.log("📁 [DEBUG] Building file tree from:", currentArtifacts.length, "artifacts");
-      
       const tree = {};
       
       const limitedArtifacts = currentArtifacts.slice(0, 100);
       
       limitedArtifacts.forEach(file => {
-        console.log("📁 [DEBUG] Processing file for tree:", file.path);
         const pathParts = file.path.split('/');
         let currentLevel = tree;
         
@@ -3748,7 +3621,6 @@ if __name__ == "__main__":
         });
       });
       
-      console.log("📁 [DEBUG] File tree built:", Object.keys(tree).length, "root items");
       return tree;
     }, [currentArtifacts]);
   
@@ -3783,8 +3655,6 @@ if __name__ == "__main__":
         if (!aIsFolder && bIsFolder) return 1;
         return a.localeCompare(b);
       }).slice(0, 50);
-  
-      console.log("📁 [DEBUG] Rendering tree component with", items.length, "items at depth", depth);
   
       return items.map((key) => {
         const item = node[key];
@@ -3849,7 +3719,6 @@ if __name__ == "__main__":
               <div className="panel-actions-wrapper" ref={createMenuRef}>
                 <button 
                   onClick={() => {
-                    console.log("📁 [DEBUG] Create menu clicked");
                     setShowCreateMenu(prev => !prev);
                   }} 
                   className="icon-button small primary" 
@@ -3861,59 +3730,6 @@ if __name__ == "__main__":
                 {showCreateMenu && (
                   <CreateMenu onClose={() => setShowCreateMenu(false)} />
                 )}
-                
-                {/* 🎯 ADD RECOVERY BUTTON */}
-                <button 
-                  onClick={() => {
-                    console.log("🔄 [RECOVERY] Manual recovery triggered");
-                    
-                    // Reload from localStorage
-                    const savedArtifacts = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.ARTIFACTS);
-                    if (savedArtifacts) {
-                      try {
-                        const parsed = JSON.parse(savedArtifacts);
-                        const fixed = fixCorruptedArtifacts(parsed);
-                        setArtifacts(fixed);
-                        
-                        // Update current artifacts if we have this conversation
-                        if (currentConversationId && fixed[currentConversationId]) {
-                          const message = `Recovered ${fixed[currentConversationId].length} files for current conversation`;
-                          console.log("🔄 [RECOVERY]", message);
-                          alert(message);
-                        } else {
-                          const totalFiles = Object.values(fixed).reduce((sum, arr) => sum + arr.length, 0);
-                          const message = `Recovered ${Object.keys(fixed).length} conversations with ${totalFiles} total files`;
-                          console.log("🔄 [RECOVERY]", message);
-                          alert(message);
-                        }
-                      } catch (error) {
-                        console.error("❌ [RECOVERY] Failed to recover:", error);
-                        alert("Failed to recover artifacts: " + error.message);
-                      }
-                    } else {
-                      console.log("🔄 [RECOVERY] No saved artifacts found");
-                      alert("No saved artifacts found in localStorage");
-                    }
-                  }}
-                  className="icon-button small warning"
-                  title="Recover artifacts"
-                  aria-label="Recover artifacts from storage"
-                >
-                  <Shield size={14} />
-                </button>
-                
-                <button 
-                  onClick={() => {
-                    console.log("📁 [DEBUG] Manual refresh triggered");
-                    // Force re-render
-                    setArtifacts(prev => ({...prev}));
-                  }}
-                  className="icon-button small"
-                  title="Refresh"
-                  aria-label="Refresh project files"
-                >
-                  <RotateCcw size={14} />
-                </button>
               </div>
             </div>
             
@@ -4005,7 +3821,7 @@ if __name__ == "__main__":
                     {isEditing ? (
                       <>
                         <button onClick={handleSave} className="icon-button small success" aria-label="Save changes">
-                          <Save size={14} />
+                          <Check size={14} />
                         </button>
                         <button onClick={handleCancelEdit} className="icon-button small" aria-label="Cancel edit">
                           <X size={14} />
@@ -4033,7 +3849,6 @@ if __name__ == "__main__":
                     <button 
                       onClick={() => {
                         if (selectedFile) {
-                          console.log("📁 [DEBUG] Manual add to project:", selectedFile.path);
                           const artifactToAdd = {
                             ...selectedFile,
                             id: generateSafeId(selectedFile.path),
@@ -4108,8 +3923,12 @@ if __name__ == "__main__":
               <div className="header-brand">
                 <div className="header-logo"><User className="icon" /></div>
                 <div className="header-title-section">
-                  <div className="header-title">Ollama Chat
-                  </div>
+                  <div className="header-title">Ollama Chat</div>
+                  {lastSaveTime && (
+                    <div className="save-status">
+                      Last saved: {new Date(lastSaveTime).toLocaleTimeString()}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="header-status">
@@ -4137,29 +3956,6 @@ if __name__ == "__main__":
                     <SquareStack className="icon" />
                   </button>
                 )}
-                <button 
-                  onClick={() => {
-                    // Force reload conversations from localStorage
-                    const saved = localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS);
-                    if (saved) {
-                      try {
-                        const convos = JSON.parse(saved);
-                        setConversations(convos);
-                        alert(`Recovered ${convos.length} conversations`);
-                      } catch (error) {
-                        alert("Failed to recover conversations: " + error.message);
-                      }
-                    } else {
-                      alert("No saved conversations found");
-                    }
-                  }}
-                  className="icon-button"
-                  title="Recover conversations"
-                  aria-label="Recover conversations from storage"
-                >
-                  <Shield size={16} />
-                </button>
-                <ThemeToggle />
                 <SettingsDropdown />
                 <ModelDropdown />
               </div>
@@ -4190,18 +3986,6 @@ if __name__ == "__main__":
               <div className="artifacts-header">
                 <h3>Project Files ({currentArtifacts.length})</h3>
                 <div className="artifacts-header-actions">
-                  <button 
-                    onClick={() => {
-                      console.log("🔄 Manual refresh from header");
-                      // Force state update
-                      setArtifacts(prev => ({...prev}));
-                    }}
-                    className="icon-button small"
-                    title="Refresh"
-                    aria-label="Refresh project files"
-                  >
-                    <RotateCcw size={14} />
-                  </button>
                   <button onClick={toggleArtifactsPanel} className="icon-button" aria-label="Close project files">
                     <X size={16} />
                   </button>
