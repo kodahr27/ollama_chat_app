@@ -125,79 +125,9 @@ body {
   flex-direction: column;
 }
 
-/* 🎯 ANDROID DETECTION */
-.android .code-editor {
-  font-size: 16px !important;
-  padding: var(--spacing-md);
-  height: calc(100vh - 250px) !important;
-  min-height: 400px !important;
-  max-height: 80vh !important;
-  -webkit-overflow-scrolling: touch !important;
-  overflow-y: auto !important;
-  resize: none !important;
-  position: relative;
-}
-
-.android.keyboard-open .code-editor {
-  height: calc(100vh - 350px) !important;
-}
-
-.android .artifact-manager.mobile .code-editor {
-  height: calc(100vh - 200px) !important;
-}
-
-.android.keyboard-open .artifact-manager.mobile .code-editor {
-  height: calc(100vh - 300px) !important;
-}
-
-/* 🎯 MOBILE KEYBOARD FIXES */
-.android .code-editor {
-  user-select: text !important;
-  -webkit-user-select: text !important;
-  touch-action: manipulation !important;
-  -webkit-tap-highlight-color: transparent !important;
-  transform: translate3d(0, 0, 0) !important;
-  will-change: transform !important;
-  backface-visibility: hidden !important;
-  -webkit-backface-visibility: hidden !important;
-  position: relative !important;
-  z-index: 10000 !important;
-}
-
-/* Prevent container from moving when keyboard opens */
-.android.keyboard-open .editor-container {
-  position: fixed !important;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 10000;
-  background: var(--bg-primary);
-}
-
-.android.keyboard-open .editor-content {
-  height: calc(100vh - 150px) !important;
-  min-height: 300px !important;
-}
-
-/* Fix for virtual keyboard viewport */
-@supports (height: 100dvh) {
-  .android.keyboard-open .editor-content {
-    height: calc(100dvh - 150px) !important;
-  }
-}
-
 /* Prevent textarea from losing focus during composition */
 .code-editor[data-composition="true"] {
   caret-color: transparent !important;
-}
-
-/* Ensure editor stays in view when keyboard is open */
-.android.keyboard-open .artifact-manager.mobile {
-  position: fixed !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  z-index: 10000 !important;
 }
 
 /* 🎯 SCROLLBAR STYLES */
@@ -1005,7 +935,6 @@ pre {
   opacity: 0.8;
 }
 
-// CSS for save status
 .save-status {
   font-size: 11px;
   color: var(--text-tertiary);
@@ -1655,17 +1584,6 @@ pre {
   -webkit-appearance: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
-}
-
-.code-editor.android {
-  height: calc(100vh - 250px) !important;
-  min-height: 500px !important;
-  max-height: none !important;
-  position: relative;
-  -webkit-overflow-scrolling: touch;
-  overflow-y: scroll;
-  transition: none !important;
-  animation: none !important;
 }
 
 .code-editor:focus {
@@ -3808,103 +3726,6 @@ pre {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-
-/* 🎯 ANDROID SPECIFIC FIXES */
-@supports (-webkit-touch-callout: none) and (not (-webkit-overflow-scrolling: none)) {
-  .android .code-editor {
-    height: 400px !important;
-    min-height: 400px !important;
-    max-height: 70vh !important;
-    position: relative;
-    overflow-y: auto !important;
-    transition: none !important;
-    animation: none !important;
-    padding-bottom: 300px !important;
-    resize: none !important;
-  }
-  
-  .android.keyboard-open .code-editor {
-    height: calc(100vh - 300px) !important;
-  }
-  
-  .android .artifact-manager.mobile .editor-content {
-    height: 500px !important;
-    min-height: 500px !important;
-    position: relative;
-  }
-  
-  .android.keyboard-open .artifact-manager.mobile .editor-content {
-    height: calc(100vh - 250px) !important;
-  }
-  
-  .android .artifact-manager.mobile {
-    height: 100% !important;
-    overflow: hidden !important;
-  }
-  
-  .android.keyboard-open .artifact-manager.mobile {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 10000;
-  }
-}
-
-/* 🎯 GLOBAL MOBILE FIXES */
-@media (hover: none) and (pointer: coarse) {
-  textarea.code-editor {
-    animation: none !important;
-    transition: none !important;
-    -webkit-tap-highlight-color: transparent !important;
-    touch-action: manipulation;
-    -webkit-overflow-scrolling: auto !important;
-  }
-  
-  body.keyboard-open {
-    position: fixed;
-    width: 100%;
-  }
-}
-
-/* 🎯 ENHANCED ANDROID EDITOR STYLING */
-.android .code-editor:focus {
-  box-shadow: 0 0 0 1px var(--accent-primary) !important;
-  border-color: var(--accent-primary) !important;
-  outline: none !important;
-}
-
-/* 🎯 FIX FOR ANDROID CHROME'S VIRTUAL KEYBOARD */
-@media (max-width: 768px) {
-  .code-editor {
-    position: relative;
-    z-index: 1000;
-    transform: translate3d(0, 0, 0);
-    contain: strict;
-  }
-  
-  .android .editor-container {
-    height: calc(100vh - 300px) !important;
-    min-height: 300px !important;
-  }
-  
-  .android .editor-content {
-    height: 100% !important;
-    flex: 1 1 auto !important;
-  }
-}
-
-/* 🎯 ANDROID 10+ SPECIFIC FIXES */
-@supports (height: 100dvh) {
-  .android .code-editor {
-    max-height: calc(100dvh - 200px) !important;
-  }
-  
-  .android .artifact-manager.mobile .editor-content {
-    height: calc(100dvh - 150px) !important;
-  }
 }
 
 /* 🎯 RESPONSIVE DESIGN */

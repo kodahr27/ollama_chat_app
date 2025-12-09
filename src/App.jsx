@@ -372,9 +372,6 @@ const useTheme = () => {
   };
 };
 
-// 🎯 ANDROID DETECTION
-const isAndroidRef = { current: /android/i.test(navigator.userAgent) };
-
 // 🎯 COMPONENTS
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -443,6 +440,807 @@ const LoadingSkeleton = React.memo(() => (
   </div>
 ));
 
+// 🎯 OPTIMIZED MESSAGE COMPONENT
+const Message = React.memo(({ message, copied, onCopy, onViewEdit, onAddToProject, currentArtifacts }) => {
+  const { content, role, image, parsedResponse } = message;
+  const isAssistant = role === "assistant";
+  
+  const handleCopy = useCallback(() => {
+    onCopy(message.id, content);
+  }, [onCopy, message.id, content]);
+  
+  const handleViewEdit = useCallback((edit) => {
+    onViewEdit(edit);
+  }, [onViewEdit]);
+  
+  const handleAddToProject = useCallback((artifact) => {
+    onAddToProject(artifact);
+  }, [onAddToProject]);
+  
+  return (
+    <div className="message-content">
+      {image && (
+        <div className="message-image-container">
+          <img src={image} alt="Attached" className="message-image" onClick={() => window.open(image, '_blank')} />
+        </div>
+      )}
+      
+      {isAssistant ? (
+        <>
+          {content && (
+            <div className="message-text">
+              <ReactMarkdown rehypePlugins={[rehypeRaw]} components={{
+                code: ({ node, inline, className, children, ...props }) => {
+                  const match = /language-(\w+)/.exec(className || '');
+                  if (!inline && match) {
+                    return (
+                      <div className="code-block-wrapper">
+                        <div className="code-block-header">
+                          <button className="code-block-toggle">
+                            <span className="code-block-language">{match[1]?.toUpperCase() || 'CODE'}</span>
+                          </button>
+                          <div className="code-block-actions">
+                            <button 
+                              onClick={() => navigator.clipboard.writeText(String(children))}
+                              className="code-copy-button"
+                              title="Copy code"
+                            >
+                              <Copy size={14} />
+                            </button>
+                          </div>
+                        </div>
+                        <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div" showLineNumbers={false}>
+                          {String(children)}
+                        </SyntaxHighlighter>
+                      </div>
+                    );
+                  }
+                  return <code className="inline-code">{children}</code>;
+                },
+                p: ({ children, node }) => {
+                  return <div className="message-paragraph">{children}</div>;
+                },
+              }}>
+                {content}
+              </ReactMarkdown>
+            </div>
+          )}
+          {parsedResponse?.instructions?.length > 0 && (
+            <div className="instructions-display">
+              <div className="instructions-header">
+                <Play size={16} />
+                <span>Instructions</span>
+              </div>
+              <div className="instructions-content">
+                {parsedResponse.instructions.slice(0, 5).map((instruction, index) => (
+                  <div key={index} className="instruction-step">
+                    <div className="step-number">{index + 1}</div>
+                    <div className="step-content">
+                      <div className="instruction-text">{instruction}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {parsedResponse?.edits?.length > 0 && (
+            <div className="edits-notification">
+              <div className="edits-header">
+                <Edit size={16} />
+                <span>Suggested File Changes ({parsedResponse.edits.length})</span>
+              </div>
+              <div className="edits-list">
+                {parsedResponse.edits.slice(0, 3).map((edit) => (
+                  <div 
+                    key={edit.id} 
+                    className="edit-notification" 
+                    onClick={() => handleViewEdit(edit)}
+                    style={{ cursor: 'pointer' }}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    <FileText size={14} />
+                    <span className="edit-file">{edit.path}</span>
+                    <span className="edit-badge context">
+                      {edit.operationCount} operations
+                    </span>
+                    <ChevronRight size={14} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {parsedResponse?.artifacts?.length > 0 && (
+            <ArtifactsDisplay 
+              artifacts={parsedResponse.artifacts}
+              currentArtifacts={currentArtifacts}
+              messageId={message.id}
+              onAddToProject={handleAddToProject}
+            />
+          )}
+        </>
+      ) : (
+        <div className="user-text">{content}</div>
+      )}
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.message.id === nextProps.message.id &&
+    prevProps.copied === nextProps.copied &&
+    prevProps.currentArtifacts === nextProps.currentArtifacts
+  );
+});
+
+// 🎯 OPTIMIZED ARTIFACTS DISPLAY
+const ArtifactsDisplay = React.memo(({ artifacts, currentArtifacts, messageId, onAddToProject }) => {
+  return (
+    <div className="artifacts-display">
+      <div className="artifacts-header">
+        <div className="artifacts-title">
+          <FileText size={16} />
+          <span>Generated Files</span>
+          {artifacts.some(a => a.addedToProject) && (
+            <span className="added-badge">
+              <Check size={14} />
+              {artifacts.filter(a => a.addedToProject).length} added to project
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="artifacts-list">
+        {artifacts.slice(0, 5).map((artifact) => {
+          const isInProject = artifact.addedToProject || currentArtifacts.some(a => 
+            a.path === artifact.path || 
+            (a.content && artifact.content && a.content === artifact.content)
+          );
+          
+          return (
+            <ArtifactItem 
+              key={artifact.id}
+              artifact={artifact}
+              isInProject={isInProject}
+              messageId={messageId}
+              onAddToProject={onAddToProject}
+            />
+          );
+        })}
+      </div>
+      {artifacts.length > 5 && (
+        <div className="artifacts-footer">
+          <small>... and {artifacts.length - 5} more files</small>
+        </div>
+      )}
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.artifacts === nextProps.artifacts &&
+    prevProps.currentArtifacts === nextProps.currentArtifacts &&
+    prevProps.messageId === nextProps.messageId
+  );
+});
+
+// 🎯 OPTIMIZED ARTIFACT ITEM
+const ArtifactItem = React.memo(({ artifact, isInProject, messageId, onAddToProject }) => {
+  const handleAddToProject = useCallback(() => {
+    const enhancedArtifact = {
+      ...artifact,
+      id: generateSafeId(`file-${artifact.path}`),
+      type: 'file',
+      createdBy: 'ai',
+      timestamp: new Date().toISOString(),
+      addedToProject: true
+    };
+    onAddToProject(enhancedArtifact);
+  }, [artifact, onAddToProject]);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(artifact.content);
+  }, [artifact.content]);
+
+  return (
+    <div className={`artifact-item ${isInProject ? 'added' : ''}`}>
+      <div className="artifact-header">
+        <div className="artifact-info">
+          <div className="file-icon">
+            {isInProject ? <Check size={14} className="added-icon" /> : <FileText size={14} />}
+          </div>
+          <div className="file-details">
+            <span className="file-name">{artifact.path}</span>
+            <div className="file-meta">
+              <span className="file-language">{artifact.language}</span>
+              <span className="file-size">
+                {artifact.lineCount} lines • {formatBytes(artifact.size || artifact.content.length)}
+              </span>
+            </div>
+            {isInProject && (
+              <span className="file-status-badge">
+                <Check size={10} />
+                In Project
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="artifact-actions">
+          {!isInProject ? (
+            <button 
+              onClick={handleAddToProject}
+              className="add-to-project-btn"
+              title="Add to project"
+            >
+              <Plus size={14} />
+              Add
+            </button>
+          ) : null}
+          <button 
+            onClick={handleCopy}
+            className="copy-artifact-btn"
+            title="Copy code"
+          >
+            <Copy size={14} />
+            Copy
+          </button>
+        </div>
+      </div>
+      {!isInProject && (
+        <div className="artifact-notice">
+          <small>Click "Add" to include this file in your project</small>
+        </div>
+      )}
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.artifact.id === nextProps.artifact.id &&
+    prevProps.isInProject === nextProps.isInProject
+  );
+});
+
+// 🎯 OPTIMIZED MESSAGE ROW
+const MessageRow = React.memo(({ message, copied, onCopy, onViewEdit, onAddToProject, currentArtifacts }) => {
+  const isUser = message.role === "user";
+  
+  const handleCopy = useCallback(() => {
+    onCopy(message.id, message.content);
+  }, [onCopy, message.id, message.content]);
+  
+  return (
+    <motion.div
+      key={message.id}
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      className={`message-row ${isUser ? "message-row-user" : "message-row-assistant"}`}
+    >
+      <Avatar role={message.role} />
+      <div className={`bubble ${isUser ? "bubble-user" : message.isError ? "bubble-error" : "bubble-assistant"}`}>
+        <Message 
+          message={message} 
+          copied={copied}
+          onCopy={onCopy}
+          onViewEdit={onViewEdit}
+          onAddToProject={onAddToProject}
+          currentArtifacts={currentArtifacts}
+        />
+        {message.isStreaming && (
+          <div className="typing-dots-container">
+            <div className="typing-dots"><span></span><span></span><span></span></div>
+          </div>
+        )}
+        {!message.isStreaming && !isUser && (
+          <button onClick={handleCopy} className="copy-button" aria-label="Copy message">
+            {copied === message.id ? <Check className="icon-small" /> : <Copy className="icon-small" />}
+          </button>
+        )}
+      </div>
+    </motion.div>
+  );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.message.id === nextProps.message.id &&
+    prevProps.copied === nextProps.copied &&
+    prevProps.currentArtifacts === nextProps.currentArtifacts
+  );
+});
+
+// 🎯 OPTIMIZED FILE TREE ITEM
+const FileTreeItem = React.memo(({ item, level, isSelected, isExpanded, onSelect, onToggle, onDelete }) => {
+  const handleSelect = useCallback((e) => {
+    e.stopPropagation();
+    onSelect(item);
+  }, [onSelect, item]);
+
+  const handleToggle = useCallback((e) => {
+    e.stopPropagation();
+    onToggle(item.fullPath);
+  }, [onToggle, item.fullPath]);
+
+  const handleDelete = useCallback((e) => {
+    e.stopPropagation();
+    onDelete(item.fullPath || item.path);
+  }, [onDelete, item]);
+
+  if (item.isFolder) {
+    return (
+      <div className="folder-container">
+        <div 
+          className={`file-tree-item folder-item ${isExpanded ? 'expanded' : ''}`}
+          onClick={handleToggle}
+          style={{ paddingLeft: `${level * 16 + 16}px` }}
+        >
+          <div className="folder-icon">
+            <ChevronRight size={12} className={`folder-chevron ${isExpanded ? 'expanded' : ''}`} />
+            <Folder size={14} />
+          </div>
+          <span className="folder-name">{item.name}</span>
+          {Object.keys(item.children || {}).length > 0 && (
+            <span className="folder-count">{Object.keys(item.children).length}</span>
+          )}
+        </div>
+        {isExpanded && item.children && (
+          <div className="folder-children">
+            {Object.values(item.children).map((child) => (
+              <FileTreeItem 
+                key={child.id || child.fullPath}
+                item={child}
+                level={level + 1}
+                isSelected={isSelected}
+                isExpanded={isExpanded}
+                onSelect={onSelect}
+                onToggle={onToggle}
+                onDelete={onDelete}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div 
+      key={item.id}
+      className={`file-tree-item file-item ${isSelected ? 'selected' : ''}`}
+      onClick={handleSelect}
+      style={{ paddingLeft: `${level * 16 + 32}px` }}
+    >
+      <div className="file-icon">
+        <FileText size={14} />
+      </div>
+      <span className="file-name">{item.name}</span>
+      <span className="file-language-badge">{item.language}</span>
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.item.id === nextProps.item.id &&
+    prevProps.isSelected === nextProps.isSelected &&
+    prevProps.isExpanded === nextProps.isExpanded &&
+    prevProps.level === nextProps.level
+  );
+});
+
+// 🎯 OPTIMIZED ARTIFACT MANAGER
+const ArtifactManager = React.memo(({ 
+  isMobile, 
+  currentConversationId, 
+  currentArtifacts,
+  selectedFile,
+  isEditing,
+  viewMode,
+  mobilePanel,
+  searchTerm,
+  expandedFolders,
+  onSelectFile,
+  onSetEditing,
+  onSetViewMode,
+  onSetMobilePanel,
+  onSetSearchTerm,
+  onSetExpandedFolders,
+  onSaveFile,
+  onCancelEdit,
+  onDeleteFile,
+  onCreateFile,
+  onCreateFolder
+}) => {
+  const debouncedSearchTerm = useDebounce(searchTerm, APP_CONFIG.TIMEOUTS.DEBOUNCE_DELAY);
+  const editorTextareaRef = useRef(null);
+  const isComposingRef = useRef(false);
+  const [textareaValue, setTextareaValue] = useState('');
+  const textareaValueRef = useRef('');
+
+  const buildFileTree = useCallback((artifacts) => {
+    const tree = {};
+    
+    artifacts.forEach(artifact => {
+      const parts = artifact.path.split('/');
+      let currentLevel = tree;
+      
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        const isLastPart = i === parts.length - 1;
+        
+        if (isLastPart) {
+          currentLevel[part] = {
+            ...artifact,
+            name: part,
+            isFile: true,
+            fullPath: artifact.path
+          };
+        } else {
+          if (!currentLevel[part]) {
+            currentLevel[part] = {
+              name: part,
+              isFolder: true,
+              fullPath: parts.slice(0, i + 1).join('/'),
+              children: {}
+            };
+          }
+          currentLevel = currentLevel[part].children;
+        }
+      }
+    });
+    
+    return tree;
+  }, []);
+
+  const getFilteredArtifacts = useCallback(() => {
+    if (!searchTerm.trim()) {
+      return currentArtifacts;
+    }
+    
+    const searchLower = searchTerm.toLowerCase();
+    return currentArtifacts.filter(artifact => 
+      artifact.path.toLowerCase().includes(searchLower) ||
+      artifact.content.toLowerCase().includes(searchLower) ||
+      artifact.language.toLowerCase().includes(searchLower)
+    );
+  }, [currentArtifacts, searchTerm]);
+
+  const filteredFileTree = useMemo(() => {
+    const filteredArtifacts = getFilteredArtifacts();
+    return buildFileTree(filteredArtifacts);
+  }, [getFilteredArtifacts, buildFileTree]);
+
+  const toggleFolder = useCallback((folderPath, e) => {
+    if (e) e.stopPropagation();
+    onSetExpandedFolders(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(folderPath)) newSet.delete(folderPath);
+      else newSet.add(folderPath);
+      return newSet;
+    });
+  }, [onSetExpandedFolders]);
+
+  const handleEditorChange = useCallback((e) => {
+    const value = e.target.value;
+    textareaValueRef.current = value;
+    
+    if (!isComposingRef.current && editorTextareaRef.current) {
+      requestAnimationFrame(() => {
+        if (editorTextareaRef.current) {
+          editorTextareaRef.current.style.height = 'auto';
+          editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
+        }
+      });
+    }
+    
+    e.persist?.();
+  }, []);
+
+  const handleCompositionStart = useCallback((e) => {
+    isComposingRef.current = true;
+  }, []);
+
+  const handleCompositionEnd = useCallback((e) => {
+    isComposingRef.current = false;
+    if (editorTextareaRef.current) {
+      textareaValueRef.current = editorTextareaRef.current.value;
+    }
+  }, []);
+
+  const handleSave = useCallback(() => {
+    if (selectedFile && editorTextareaRef.current) {
+      const contentToSave = editorTextareaRef.current.value;
+      textareaValueRef.current = contentToSave;
+      onSaveFile(contentToSave);
+    }
+  }, [selectedFile, onSaveFile]);
+
+  const handleCancelEdit = useCallback(() => {
+    if (selectedFile && editorTextareaRef.current) {
+      const originalContent = selectedFile.content;
+      editorTextareaRef.current.value = originalContent;
+      textareaValueRef.current = originalContent;
+      
+      editorTextareaRef.current.style.height = 'auto';
+      editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
+      
+      onCancelEdit();
+    }
+  }, [selectedFile, onCancelEdit]);
+
+  const handleDelete = useCallback((filePath, e) => {
+    if (e) e.stopPropagation();
+    if (!confirm(`Are you sure you want to delete "${filePath}"?\n\nThis will remove the file from your project and cannot be undone.`)) return;
+    
+    onDeleteFile(filePath);
+  }, [onDeleteFile]);
+
+  const handleFileSelect = useCallback((file, e) => {
+    if (e) e.stopPropagation();
+    onSelectFile(file);
+    onSetEditing(false);
+    onSetViewMode('editor');
+    if (isMobile) onSetMobilePanel('editor');
+  }, [onSelectFile, onSetEditing, onSetViewMode, isMobile, onSetMobilePanel]);
+
+  useEffect(() => {
+    if (selectedFile && editorTextareaRef.current) {
+      textareaValueRef.current = selectedFile.content;
+      setTextareaValue(selectedFile.content);
+      
+      if (editorTextareaRef.current) {
+        editorTextareaRef.current.value = selectedFile.content;
+        
+        requestAnimationFrame(() => {
+          if (editorTextareaRef.current) {
+            editorTextareaRef.current.style.height = 'auto';
+            editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
+          }
+        });
+      }
+    }
+  }, [selectedFile]);
+
+  useEffect(() => {
+    if (isEditing && selectedFile && editorTextareaRef.current) {
+      const timer = setTimeout(() => {
+        if (editorTextareaRef.current) {
+          editorTextareaRef.current.focus();
+          const length = editorTextareaRef.current.value.length;
+          editorTextareaRef.current.setSelectionRange(length, length);
+        }
+      }, 100);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [isEditing, selectedFile]);
+
+  const TreePanel = useMemo(() => (
+    (!isMobile || mobilePanel === 'tree') && (
+      <div className="file-tree-panel">
+        <div className="panel-header">
+          <div className="panel-title">
+            <FolderOpen size={16} />
+            <span>Project Files</span>
+            <span className="file-count">{currentArtifacts.length}</span>
+          </div>
+        </div>
+        
+        <div className="search-box">
+          <Search size={14} />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => onSetSearchTerm(e.target.value)}
+            placeholder="Search files..."
+            className="search-input"
+            aria-label="Search files"
+          />
+          {searchTerm && (
+            <button onClick={() => onSetSearchTerm('')} className="search-clear" aria-label="Clear search">
+              <X size={12} />
+            </button>
+          )}
+        </div>
+        
+        <div className="file-tree-container">
+          {currentArtifacts.length === 0 ? (
+            <div className="empty-tree-state">
+              <FileCode size={24} />
+              <p>No files yet</p>
+              <button 
+                onClick={() => onCreateFile()}
+                className="create-first-file-btn small"
+              >
+                <FilePlus size={12} />
+                Create First File
+              </button>
+            </div>
+          ) : (
+            <div className="file-tree">
+              {Object.values(filteredFileTree).map((item) => (
+                <FileTreeItem 
+                  key={item.id || item.fullPath}
+                  item={item}
+                  level={0}
+                  isSelected={selectedFile?.path === item.path}
+                  isExpanded={expandedFolders.has(item.fullPath)}
+                  onSelect={handleFileSelect}
+                  onToggle={toggleFolder}
+                  onDelete={handleDelete}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  ), [
+    isMobile,
+    mobilePanel,
+    currentArtifacts.length,
+    searchTerm,
+    filteredFileTree,
+    selectedFile,
+    expandedFolders,
+    onSetSearchTerm,
+    onCreateFile,
+    handleFileSelect,
+    toggleFolder,
+    handleDelete
+  ]);
+
+  const EditorPanel = useMemo(() => (
+    (!isMobile || mobilePanel === 'editor') && (
+      <div className="file-editor-panel">
+        {isMobile && (
+          <div className="mobile-editor-header">
+            <button 
+              onClick={() => onSetMobilePanel('tree')}
+              className="mobile-back-btn"
+              aria-label="Back to files"
+            >
+              <ChevronLeft size={16} />
+              Back to Files
+            </button>
+            <span className="mobile-file-count">{currentArtifacts.length} files</span>
+          </div>
+        )}
+        
+        {selectedFile ? (
+          <div className="editor-container">
+            <div className="editor-header">
+              <div className="file-info">
+                <FileCode size={16} />
+                <div className="file-details">
+                  <span className="file-path">{selectedFile.path}</span>
+                  <span className="file-language">{selectedFile.language}</span>
+                </div>
+              </div>
+              
+              <div className="editor-actions">
+                <button 
+                  onClick={() => onSetViewMode(prev => prev === 'editor' ? 'preview' : 'editor')} 
+                  className="icon-button small"
+                  aria-label={viewMode === 'editor' ? 'Switch to preview mode' : 'Switch to edit mode'}
+                >
+                  {viewMode === 'editor' ? <Eye size={14} /> : <EyeOff size={14} />}
+                </button>
+                {isEditing ? (
+                  <>
+                    <button onClick={handleSave} className="icon-button small success" aria-label="Save changes">
+                      <Check size={14} />
+                    </button>
+                    <button onClick={handleCancelEdit} className="icon-button small" aria-label="Cancel edit">
+                      <X size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => onSetEditing(true)} className="icon-button small" aria-label="Edit file">
+                    <Edit size={14} />
+                  </button>
+                )}
+                <button 
+                  onClick={() => navigator.clipboard.writeText(selectedFile.content)} 
+                  className="icon-button small"
+                  aria-label="Copy file content"
+                >
+                  <Copy size={14} />
+                </button>
+                <button 
+                  onClick={(e) => handleDelete(selectedFile.path, e)} 
+                  className="icon-button small danger"
+                  aria-label="Delete file"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+            
+            <div className="editor-content">
+              {viewMode === 'editor' ? (
+                <textarea
+                  ref={editorTextareaRef}
+                  defaultValue={selectedFile.content}
+                  onChange={handleEditorChange}
+                  onCompositionStart={handleCompositionStart}
+                  onCompositionEnd={handleCompositionEnd}
+                  className="code-editor"
+                  spellCheck="false"
+                  disabled={!isEditing}
+                  aria-label="Code editor"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  data-gramm="false"
+                  data-gramm_editor="false"
+                  data-enable-grammarly="false"
+                  suppressHydrationWarning
+                  key={`editor-${selectedFile.id}-${isEditing ? 'editing' : 'readonly'}`}
+                />
+              ) : (
+                <div className="code-preview">
+                  <SyntaxHighlighter 
+                    language={selectedFile.language} 
+                    style={oneDark} 
+                    showLineNumbers={true} 
+                    wrapLongLines={false}
+                  >
+                    {selectedFile.content}
+                  </SyntaxHighlighter>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="no-file-selected">
+            <FileCode size={48} />
+            <h3>No file selected</h3>
+            <p>Select a file from the sidebar to view or edit its contents</p>
+            <button 
+              onClick={() => onCreateFile()} 
+              className="create-file-button"
+              aria-label="Create new file"
+            >
+              <FilePlus size={16} />Create New File
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  ), [
+    isMobile,
+    mobilePanel,
+    currentArtifacts.length,
+    selectedFile,
+    viewMode,
+    isEditing,
+    handleSave,
+    handleCancelEdit,
+    handleDelete,
+    handleEditorChange,
+    handleCompositionStart,
+    handleCompositionEnd,
+    onSetMobilePanel,
+    onSetViewMode,
+    onSetEditing,
+    onCreateFile
+  ]);
+
+  return (
+    <div className={`artifact-manager ${isMobile ? 'mobile' : ''}`}>
+      {TreePanel}
+      {EditorPanel}
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.isMobile === nextProps.isMobile &&
+    prevProps.currentConversationId === nextProps.currentConversationId &&
+    prevProps.currentArtifacts === nextProps.currentArtifacts &&
+    prevProps.selectedFile === nextProps.selectedFile &&
+    prevProps.isEditing === nextProps.isEditing &&
+    prevProps.viewMode === nextProps.viewMode &&
+    prevProps.mobilePanel === nextProps.mobilePanel &&
+    prevProps.searchTerm === nextProps.searchTerm &&
+    prevProps.expandedFolders === nextProps.expandedFolders
+  );
+});
+
 // 🎯 MAIN APP COMPONENT
 export default function App() {
   const renderCount = useRef(0);
@@ -480,6 +1278,12 @@ export default function App() {
   const [showEmptyState, setShowEmptyState] = useState(true);
   const [mobilePanel, setMobilePanel] = useState('tree');
   const [lastSaveTime, setLastSaveTime] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedContent, setEditedContent] = useState('');
+  const [expandedFolders, setExpandedFolders] = useState(new Set());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [viewMode, setViewMode] = useState('editor');
 
   const abortControllerRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -494,26 +1298,14 @@ export default function App() {
   const saveTimeoutRef = useRef(null);
   const lastSaveRef = useRef(Date.now());
 
-  // 🎯 FIX: Add ref to track current artifacts for use in sendMessage
   const currentArtifactsRef = useRef([]);
   
-  // 🎯 DERIVED STATE
   const currentArtifacts = useMemo(() => {
     const arts = artifacts[currentConversationId] || [];
-    // Update the ref whenever currentArtifacts changes
     currentArtifactsRef.current = arts;
     return arts;
   }, [artifacts, currentConversationId]);
 
-  // 🎯 SELECTED FILE STATE (for ArtifactManager)
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editedContent, setEditedContent] = useState('');
-  const [expandedFolders, setExpandedFolders] = useState(new Set());
-  const [searchTerm, setSearchTerm] = useState('');
-  const [viewMode, setViewMode] = useState('editor');
-
-  // 🎯 PARSE SEARCH/REPLACE
   const parseSearchReplace = useCallback((content) => {
     if (!content || typeof content !== 'string' || content.length < 20) {
       return [];
@@ -536,7 +1328,6 @@ export default function App() {
     return operations;
   }, []);
   
-  // 🎯 APPLY SEARCH/REPLACE
   const applySearchReplace = useCallback((originalContent, operations) => {
     if (!originalContent || !operations || operations.length === 0) {
       return { result: originalContent, appliedCount: 0, failedOps: [] };
@@ -649,7 +1440,6 @@ export default function App() {
     return intersection.size / union.size;
   }, []);
 
-  // 🎯 PARSE LLM RESPONSE
   const parseLLMResponse = useCallback((message) => {
     try {
       if (!message || typeof message !== 'string') {
@@ -1079,19 +1869,16 @@ export default function App() {
     
     const normalizedEditPath = normalizePath(editPath);
     
-    // 🎯 FIX 1: Exact match first
     for (const art of limitedArtifacts) {
       if (normalizePath(art.path) === normalizedEditPath) return art;
     }
     
-    // 🎯 FIX 2: Match by filename only (without path)
     const editFileName = normalizedEditPath.split('/').pop();
     for (const art of limitedArtifacts) {
       const artFileName = normalizePath(art.path).split('/').pop();
       if (artFileName === editFileName) return art;
     }
     
-    // 🎯 FIX 3: Partial match (file contains edit path or vice versa)
     for (const art of limitedArtifacts) {
       const normalizedArtPath = normalizePath(art.path);
       if (normalizedArtPath.includes(normalizedEditPath) || 
@@ -1100,7 +1887,6 @@ export default function App() {
       }
     }
     
-    // 🎯 FIX 4: Case-insensitive contains match
     for (const art of limitedArtifacts) {
       if (art.path.toLowerCase().includes(editPath.toLowerCase()) ||
           editPath.toLowerCase().includes(art.path.toLowerCase())) {
@@ -1111,20 +1897,16 @@ export default function App() {
     return null;
   }, []);
 
-  // 🎯 FIXED: getEnhancedFileContext now uses currentArtifacts to get latest content
   const getEnhancedFileContext = useCallback((artifacts, userInput) => {
     if (!artifacts || artifacts.length === 0) {
       return '\n\nPROJECT CONTEXT: No existing files. Starting fresh project.';
     }
 
-    // Get the absolute latest content by finding each artifact in currentArtifactsRef
     const getLatestArtifactContent = (artifactPath) => {
-      // Check if this artifact exists in currentArtifacts (which has user edits)
       const currentArtifact = currentArtifactsRef.current.find(a => a.path === artifactPath);
       if (currentArtifact) {
         return currentArtifact.content;
       }
-      // Fall back to the provided artifact content
       const providedArtifact = artifacts.find(a => a.path === artifactPath);
       return providedArtifact?.content || '';
     };
@@ -1138,7 +1920,6 @@ export default function App() {
     const filesToShow = artifacts.slice(0, 15);
     
     filesToShow.forEach(file => {
-      // Use the latest content, not just what was parsed from AI response
       const latestContent = getLatestArtifactContent(file.path);
       const lineCount = latestContent.split('\n').length;
       
@@ -1168,14 +1949,6 @@ export default function App() {
     contextParts.push('6. NOTE: User may have modified files since your last response. Use the content shown above.');
 
     return contextParts.join('\n');
-  }, []);
-
-  // 🎯 ANDROID KEYBOARD HANDLING
-  useEffect(() => {
-    // Detect Android and add class to HTML element
-    if (isAndroidRef.current) {
-      document.documentElement.classList.add('android');
-    }
   }, []);
 
   // 🎯 USE EFFECTS
@@ -1219,7 +1992,6 @@ export default function App() {
       
       saveArtifacts(updatedArtifacts);
       
-      // Update conversation metadata
       if (conversations.length > 0) {
         const updatedConversations = conversations.map(conv => 
           conv.id === newConvId 
@@ -1242,7 +2014,6 @@ export default function App() {
     
     saveArtifacts(updatedArtifacts);
     
-    // Update conversation metadata
     if (conversations.length > 0) {
       const updatedConversations = conversations.map(conv => 
         conv.id === currentConversationId 
@@ -1341,23 +2112,6 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [messages.length]);
-
-  // 🎯 IOS & ANDROID KEYBOARD FIX: Prevent focus loss on re-renders
-  useEffect(() => {
-    // Store the current active element before any state change
-    const activeElement = document.activeElement;
-    
-    // After state updates, restore focus if it was on a textarea
-    const timer = setTimeout(() => {
-      if (activeElement && 
-          (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT') &&
-          document.activeElement !== activeElement) {
-        activeElement.focus();
-      }
-    }, 50);
-    
-    return () => clearTimeout(timer);
-  }, [input, editedContent, messages]);
 
   // 🎯 EVENT HANDLERS
   const handleImageSelect = useCallback((file) => {
@@ -1585,11 +2339,9 @@ export default function App() {
     input.click();
   }, [saveArtifacts]);
 
-  // 🎯 FIXED: iOS & Android Compatible Input Change Handler
   const handleInputChange = useCallback((e) => {
     const value = e.target.value;
     
-    // Prevent excessive re-renders
     if (value === input && textareaRef.current) {
       return;
     }
@@ -1599,13 +2351,10 @@ export default function App() {
       
       const ta = textareaRef.current;
       if (ta) { 
-        // 🎯 CRITICAL: Use requestAnimationFrame for Android compatibility
         requestAnimationFrame(() => {
-          if (!isAndroidRef.current) {
-            ta.style.height = "auto"; 
-            const newHeight = Math.min(ta.scrollHeight, 200);
-            ta.style.height = `${newHeight}px`;
-          }
+          ta.style.height = "auto"; 
+          const newHeight = Math.min(ta.scrollHeight, 200);
+          ta.style.height = `${newHeight}px`;
         });
       }
     }
@@ -1660,13 +2409,11 @@ export default function App() {
     }
   }, [retryCount]);
 
-  // 🎯 FIXED: Use currentArtifactsRef to get the latest file context
   const getCurrentFileContext = useCallback(() => {
     return getEnhancedFileContext(currentArtifactsRef.current, input);
   }, [getEnhancedFileContext, input]);
 
   const handleCreateNewFile = useCallback((folderPath = '') => {
-    // Prevent default behavior that might close keyboard
     const defaultExtensions = {
       'src/components': '.jsx',
       'src': '.js',
@@ -1740,7 +2487,6 @@ if __name__ == "__main__":
       timestamp: new Date().toISOString()
     };
     
-    // 🎯 FIX: Ensure we have a conversation to save to
     let convId = currentConversationId;
     if (!convId) {
       convId = generateSafeId('conv');
@@ -1763,7 +2509,6 @@ if __name__ == "__main__":
     
     const updatedArtifacts = [...currentArtifacts, newFile];
     
-    // 🎯 SAVE IMMEDIATELY
     setArtifacts(prev => ({ 
       ...prev, 
       [convId]: updatedArtifacts 
@@ -1790,7 +2535,6 @@ if __name__ == "__main__":
     setShowCreateMenu(false);
   }, [currentConversationId, currentArtifacts, artifacts, saveArtifacts, isMobile]);
 
-  // 🎯 CREATE NEW FOLDER FUNCTION
   const handleCreateNewFolder = useCallback((parentPath = '') => {
     if (!newFolderName.trim()) {
       setCreatingFolder(false);
@@ -1815,7 +2559,6 @@ if __name__ == "__main__":
     
     const updatedArtifacts = [...currentArtifacts, dummyFile];
     
-    // 🎯 SAVE IMMEDIATELY
     setArtifacts(prev => ({ 
       ...prev, 
       [currentConversationId]: updatedArtifacts 
@@ -1936,7 +2679,6 @@ if __name__ == "__main__":
     return () => clearTimeout(timer);
   }, []);
   
-  // 🎯 FIXED STREAMING FUNCTION
   const sendMessage = useCallback(async () => {
     const trimmedInput = input.trim();
     if ((!trimmedInput && !imageFile) || isLoading) return;
@@ -1945,7 +2687,6 @@ if __name__ == "__main__":
 
     if (!currentConversationId && conversations.length === 0) createNewConversation();
 
-    // 🎯 FIX: Use getCurrentFileContext which uses currentArtifactsRef
     const fileContext = getCurrentFileContext();
     const combinedSystemPrompt = systemPrompt.trim() ? 
       `${DEFAULT_SYSTEM_PROMPT}\n\n${fileContext}\n\nAdditional instructions:\n${systemPrompt.trim()}` : 
@@ -1972,7 +2713,7 @@ if __name__ == "__main__":
     setInput("");
     setOllamaError(null);
     setIsLoading(true);
-    if (textareaRef.current && !isAndroidRef.current) {
+    if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
 
@@ -2101,7 +2842,6 @@ if __name__ == "__main__":
       
       setMessages(finalMessages);
       
-      // 🎯 SAVE IMMEDIATELY after messages change
       saveConversations();
       
     } catch (err) {
@@ -2162,26 +2902,26 @@ if __name__ == "__main__":
     setViewingEdit(edit);
   }, []);
 
+  const handleAddToProject = useCallback((artifact) => {
+    handleArtifactUpdate([...currentArtifacts, artifact]);
+    setShowArtifacts(true);
+    setShowEmptyState(false);
+  }, [currentArtifacts, handleArtifactUpdate]);
+
   const handleApplyEditFromViewer = useCallback((edit) => {
     if (!edit) return;
     
     let targetFile = findTargetFileForEdit(currentArtifacts, edit.path);
     
     if (!targetFile) {
-      console.error('Target file not found:', edit.path, 'Available files:', currentArtifacts.map(f => f.path));
-      
-      // 🎯 FIX: Try to find file by showing a selection dialog
       const matchingFiles = currentArtifacts.filter(art => 
         art.path.toLowerCase().includes(edit.path.toLowerCase()) ||
         edit.path.toLowerCase().includes(art.path.toLowerCase())
       );
       
       if (matchingFiles.length === 1) {
-        // Auto-select if only one match
         targetFile = matchingFiles[0];
-        console.log('Auto-selected file:', targetFile.path, 'for edit path:', edit.path);
       } else if (matchingFiles.length > 0) {
-        // Let user choose if multiple matches
         const fileNames = matchingFiles.map(f => f.path).join('\n');
         const selected = prompt(
           `Multiple files match "${edit.path}". Which file do you want to edit?\n\nAvailable files:\n${fileNames}\n\nEnter the exact filename:`,
@@ -2217,7 +2957,6 @@ if __name__ == "__main__":
     
     handleArtifactUpdate(updatedArtifacts);
     
-    // Mark the edit as applied in the message
     if (viewingEdit) {
       setMessages(prev => prev.map(msg => {
         if (msg.parsedResponse?.edits) {
@@ -2257,452 +2996,34 @@ if __name__ == "__main__":
     setViewingEdit(null);
   }, [currentArtifacts, handleArtifactUpdate, findTargetFileForEdit, applySearchReplace, viewingEdit]);
 
-  // 🎯 RENDER FUNCTIONS
-  const renderMessage = useCallback((message) => {
-    const { content, role, image, parsedResponse } = message;
-    const isAssistant = role === "assistant";
+  const handleSaveFile = useCallback((contentToSave) => {
+    if (!selectedFile) return;
     
-    return (
-      <div className="message-content">
-        {image && (
-          <div className="message-image-container">
-            <img src={image} alt="Attached" className="message-image" onClick={() => window.open(image, '_blank')} />
-          </div>
-        )}
-        
-        {isAssistant ? (
-          <>
-            {content && (
-              <div className="message-text">
-                <ReactMarkdown rehypePlugins={[rehypeRaw]} components={{
-                  code: ({ node, inline, className, children, ...props }) => {
-                    const match = /language-(\w+)/.exec(className || '');
-                    if (!inline && match) {
-                      return (
-                        <div className="code-block-wrapper">
-                          <div className="code-block-header">
-                            <button className="code-block-toggle">
-                              <span className="code-block-language">{match[1]?.toUpperCase() || 'CODE'}</span>
-                            </button>
-                            <div className="code-block-actions">
-                              <button 
-                                onClick={() => navigator.clipboard.writeText(String(children))}
-                                className="code-copy-button"
-                                title="Copy code"
-                              >
-                                <Copy size={14} />
-                              </button>
-                            </div>
-                          </div>
-                          <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div" showLineNumbers={false}>
-                            {String(children)}
-                          </SyntaxHighlighter>
-                        </div>
-                      );
-                    }
-                    return <code className="inline-code">{children}</code>;
-                  },
-                  p: ({ children, node }) => {
-                    return <div className="message-paragraph">{children}</div>;
-                  },
-                }}>
-                  {content}
-                </ReactMarkdown>
-              </div>
-            )}
-            {parsedResponse?.instructions?.length > 0 && (
-              <div className="instructions-display">
-                <div className="instructions-header">
-                  <Play size={16} />
-                  <span>Instructions</span>
-                </div>
-                <div className="instructions-content">
-                  {parsedResponse.instructions.slice(0, 5).map((instruction, index) => (
-                    <div key={index} className="instruction-step">
-                      <div className="step-number">{index + 1}</div>
-                      <div className="step-content">
-                        <div className="instruction-text">{instruction}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {parsedResponse?.edits?.length > 0 && (
-              <div className="edits-notification">
-                <div className="edits-header">
-                  <Edit size={16} />
-                  <span>Suggested File Changes ({parsedResponse.edits.length})</span>
-                </div>
-                <div className="edits-list">
-                  {parsedResponse.edits.slice(0, 3).map((edit) => (
-                    <div 
-                      key={edit.id} 
-                      className="edit-notification" 
-                      onClick={() => handleViewEdit(edit)}
-                      style={{ cursor: 'pointer' }}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      <FileText size={14} />
-                      <span className="edit-file">{edit.path}</span>
-                      <span className="edit-badge context">
-                        {edit.operationCount} operations
-                      </span>
-                      <ChevronRight size={14} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {parsedResponse?.artifacts?.length > 0 && (
-              <div className="artifacts-display">
-                <div className="artifacts-header">
-                  <div className="artifacts-title">
-                    <FileText size={16} />
-                    <span>Generated Files</span>
-                    {parsedResponse.artifacts.some(a => a.addedToProject) && (
-                      <span className="added-badge">
-                        <Check size={14} />
-                        {parsedResponse.artifacts.filter(a => a.addedToProject).length} added to project
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="artifacts-list">
-                  {parsedResponse.artifacts.slice(0, 5).map((artifact) => {
-                    const isInProject = artifact.addedToProject || currentArtifacts.some(a => 
-                      a.path === artifact.path || 
-                      (a.content && artifact.content && a.content === artifact.content)
-                    );
-                    
-                    return (
-                      <div key={artifact.id} className={`artifact-item ${isInProject ? 'added' : ''}`}>
-                        <div className="artifact-header">
-                          <div className="artifact-info">
-                            <div className="file-icon">
-                              {isInProject ? <Check size={14} className="added-icon" /> : <FileText size={14} />}
-                            </div>
-                            <div className="file-details">
-                              <span className="file-name">{artifact.path}</span>
-                              <div className="file-meta">
-                                <span className="file-language">{artifact.language}</span>
-                                <span className="file-size">
-                                  {artifact.lineCount} lines • {formatBytes(artifact.size || artifact.content.length)}
-                                </span>
-                              </div>
-                              {isInProject && (
-                                <span className="file-status-badge">
-                                  <Check size={10} />
-                                  In Project
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <div className="artifact-actions">
-                            {!isInProject ? (
-                              <button 
-                                onClick={() => {
-                                  const enhancedArtifact = {
-                                    ...artifact,
-                                    id: generateSafeId(`file-${artifact.path}`),
-                                    type: 'file',
-                                    createdBy: 'ai',
-                                    timestamp: new Date().toISOString(),
-                                    addedToProject: true
-                                  };
-                                  handleArtifactUpdate([...currentArtifacts, enhancedArtifact]);
-                                  setShowArtifacts(true);
-                                  setShowEmptyState(false);
-                                  
-                                  artifact.addedToProject = true;
-                                  
-                                  setTimeout(() => {
-                                    setMessages(prev => prev.map(msg => 
-                                      msg.id === message.id ? {
-                                        ...msg,
-                                        parsedResponse: {
-                                          ...msg.parsedResponse,
-                                          artifacts: msg.parsedResponse?.artifacts?.map(art => 
-                                            art.path === artifact.path ? { ...art, addedToProject: true } : art
-                                          ) || []
-                                        }
-                                      } : msg
-                                    ));
-                                  }, 50);
-                                }}
-                                className="add-to-project-btn"
-                                title="Add to project"
-                              >
-                                <Plus size={14} />
-                                Add
-                              </button>
-                            ) : null}
-                            <button 
-                              onClick={() => navigator.clipboard.writeText(artifact.content)}
-                              className="copy-artifact-btn"
-                              title="Copy code"
-                            >
-                              <Copy size={14} />
-                              Copy
-                            </button>
-                          </div>
-                        </div>
-                        {!isInProject && (
-                          <div className="artifact-notice">
-                            <small>Click "Add" to include this file in your project</small>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-                {parsedResponse.artifacts.length > 5 && (
-                  <div className="artifacts-footer">
-                    <small>... and {parsedResponse.artifacts.length - 5} more files</small>
-                  </div>
-                )}
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="user-text">{content}</div>
-        )}
-      </div>
+    setEditedContent(contentToSave);
+    
+    const updatedArtifacts = currentArtifacts.map(art => 
+      art.path === selectedFile.path ? { ...art, content: contentToSave } : art
     );
-  }, [handleArtifactUpdate, currentArtifacts, handleViewEdit]);
-
-// 🎯 FIXED ARTIFACT MANAGER COMPONENT - COMPLETE ISOLATION
-const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
-  const debouncedSearchTerm = useDebounce(searchTerm, APP_CONFIG.TIMEOUTS.DEBOUNCE_DELAY);
-  const editorTextareaRef = useRef(null);
-  const isComposingRef = useRef(false);
-  
-  // 🎯 USE REFS INSTEAD OF STATE FOR NON-CRITICAL DATA
-  const prevSelectedFileRef = useRef(null);
-  const prevIsEditingRef = useRef(false);
-
-  // 🎯 MEMOIZE EVERYTHING TO PREVENT RE-RENDERS
-  const handleFileSelect = useCallback((file, e) => {
-    if (e) e.stopPropagation();
-    if (prevSelectedFileRef.current?.path === file.path && selectedFile?.path === file.path) {
-      return; // Already selected
-    }
-    setSelectedFile(file);
+    
+    setArtifacts(prev => ({ 
+      ...prev, 
+      [currentConversationId]: updatedArtifacts 
+    }));
+    
+    const updatedArtifactsObj = { 
+      ...artifacts, 
+      [currentConversationId]: updatedArtifacts 
+    };
+    
+    saveArtifacts(updatedArtifactsObj);
+    
     setIsEditing(false);
-    setViewMode('editor');
-    if (isMobile) setMobilePanel('editor');
     setShowEmptyState(false);
-  }, [isMobile]);
-
-  // 🎯 CRITICAL: Use a ref to manage textarea value without causing re-renders
-  const [textareaValue, setTextareaValue] = useState('');
-  const textareaValueRef = useRef('');
-
-  // 🎯 FIX: Initialize textarea ref on file selection - ONLY when file changes
-  useEffect(() => {
-    if (selectedFile && selectedFile !== prevSelectedFileRef.current) {
-      prevSelectedFileRef.current = selectedFile;
-      textareaValueRef.current = selectedFile.content;
-      setTextareaValue(selectedFile.content);
-      
-      if (editorTextareaRef.current) {
-        editorTextareaRef.current.value = selectedFile.content;
-        
-        // Adjust height for the content
-        if (!isAndroidRef.current) {
-          requestAnimationFrame(() => {
-            if (editorTextareaRef.current) {
-              editorTextareaRef.current.style.height = 'auto';
-              editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
-            }
-          });
-        }
-      }
-    }
-  }, [selectedFile]);
-
-  // 🎯 FIX: Focus management - ONLY focus when entering edit mode
-  useEffect(() => {
-    if (isEditing && !prevIsEditingRef.current && selectedFile && editorTextareaRef.current) {
-      prevIsEditingRef.current = true;
-      
-      // Small delay to ensure DOM is ready
-      const timer = setTimeout(() => {
-        if (editorTextareaRef.current) {
-          editorTextareaRef.current.focus();
-          // Move cursor to end
-          const length = editorTextareaRef.current.value.length;
-          editorTextareaRef.current.setSelectionRange(length, length);
-        }
-      }, 100);
-      
-      return () => {
-        clearTimeout(timer);
-        prevIsEditingRef.current = false;
-      };
-    }
-  }, [isEditing, selectedFile]);
-
-  // File tree logic - memoize heavily
-  const buildFileTree = useCallback((artifacts) => {
-    const tree = {};
     
-    artifacts.forEach(artifact => {
-      const parts = artifact.path.split('/');
-      let currentLevel = tree;
-      
-      for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        const isLastPart = i === parts.length - 1;
-        
-        if (isLastPart) {
-          // This is a file
-          currentLevel[part] = {
-            ...artifact,
-            name: part,
-            isFile: true,
-            fullPath: artifact.path
-          };
-        } else {
-          // This is a folder
-          if (!currentLevel[part]) {
-            currentLevel[part] = {
-              name: part,
-              isFolder: true,
-              fullPath: parts.slice(0, i + 1).join('/'),
-              children: {}
-            };
-          }
-          currentLevel = currentLevel[part].children;
-        }
-      }
-    });
-    
-    return tree;
-  }, []);
-
-  const getFilteredArtifacts = useCallback(() => {
-    if (!searchTerm.trim()) {
-      return currentArtifacts;
-    }
-    
-    const searchLower = searchTerm.toLowerCase();
-    return currentArtifacts.filter(artifact => 
-      artifact.path.toLowerCase().includes(searchLower) ||
-      artifact.content.toLowerCase().includes(searchLower) ||
-      artifact.language.toLowerCase().includes(searchLower)
-    );
-  }, [currentArtifacts, searchTerm]);
-
-  const filteredFileTree = useMemo(() => {
-    const filteredArtifacts = getFilteredArtifacts();
-    return buildFileTree(filteredArtifacts);
-  }, [getFilteredArtifacts, buildFileTree]);
-
-  // 🎯 Keep tree functions stable with useCallback
-  const toggleFolder = useCallback((folderPath, e) => {
-    if (e) e.stopPropagation();
-    setExpandedFolders(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(folderPath)) newSet.delete(folderPath);
-      else newSet.add(folderPath);
-      return newSet;
-    });
-  }, []);
-
-  // 🎯 FIXED: Editor change handler - NO STATE UPDATES during typing
-  const handleEditorChange = useCallback((e) => {
-    const value = e.target.value;
-    
-    // Update ref without causing re-render
-    textareaValueRef.current = value;
-    
-    // Only adjust height if needed (not on Android)
-    if (!isAndroidRef.current && !isComposingRef.current && editorTextareaRef.current) {
-      requestAnimationFrame(() => {
-        if (editorTextareaRef.current) {
-          editorTextareaRef.current.style.height = 'auto';
-          editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
-        }
-      });
-    }
-    
-    // 🎯 CRITICAL: Prevent the event from causing parent re-renders
-    e.persist?.();
-  }, []);
-
-  const handleCompositionStart = useCallback((e) => {
-    isComposingRef.current = true;
-  }, []);
-
-  const handleCompositionEnd = useCallback((e) => {
-    isComposingRef.current = false;
-    if (editorTextareaRef.current) {
-      textareaValueRef.current = editorTextareaRef.current.value;
-    }
-  }, []);
-
-  // 🎯 FIXED: Save handler - read content from textarea ref
-  const handleSave = useCallback(() => {
-    if (selectedFile && editorTextareaRef.current) {
-      // 🎯 Read content directly from textarea
-      const contentToSave = editorTextareaRef.current.value;
-      
-      // Update the ref
-      textareaValueRef.current = contentToSave;
-      
-      // 🎯 ONLY update state when saving (async to prevent re-render during save)
-      setTimeout(() => {
-        setEditedContent(contentToSave);
-        
-        const updatedArtifacts = currentArtifacts.map(art => 
-          art.path === selectedFile.path ? { ...art, content: contentToSave } : art
-        );
-        
-        setArtifacts(prev => ({ 
-          ...prev, 
-          [currentConversationId]: updatedArtifacts 
-        }));
-        
-        const updatedArtifactsObj = { 
-          ...artifacts, 
-          [currentConversationId]: updatedArtifacts 
-        };
-        
-        saveArtifacts(updatedArtifactsObj);
-        
-        setIsEditing(false);
-        setShowEmptyState(false);
-        
-        // Update selectedFile with new content
-        setSelectedFile(prev => prev ? { ...prev, content: contentToSave } : null);
-      }, 0);
-    }
+    setSelectedFile(prev => prev ? { ...prev, content: contentToSave } : null);
   }, [selectedFile, currentArtifacts, currentConversationId, artifacts, saveArtifacts]);
 
-  // 🎯 FIXED: Cancel edit - reset textarea directly
-  const handleCancelEdit = useCallback(() => {
-    if (selectedFile && editorTextareaRef.current) {
-      // 🎯 Reset textarea directly without React state
-      const originalContent = selectedFile.content;
-      editorTextareaRef.current.value = originalContent;
-      textareaValueRef.current = originalContent;
-      
-      // Adjust height
-      if (!isAndroidRef.current) {
-        editorTextareaRef.current.style.height = 'auto';
-        editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
-      }
-      
-      setIsEditing(false);
-    }
-  }, [selectedFile]);
-
-  const handleDelete = useCallback((filePath, e) => {
-    if (e) e.stopPropagation();
-    if (!confirm(`Are you sure you want to delete "${filePath}"?\n\nThis will remove the file from your project and cannot be undone.`)) return;
-    
+  const handleDeleteFile = useCallback((filePath) => {
     const updatedArtifacts = currentArtifacts.filter(art => art.path !== filePath);
     
     setArtifacts(prev => ({ 
@@ -2727,435 +3048,7 @@ const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
     }
   }, [currentArtifacts, selectedFile, currentConversationId, artifacts, saveArtifacts, isMobile]);
 
-  // Recursive component for rendering file tree - memoized
-  const FileTreeComponent = useCallback(({ node, level = 0, parentPath = '' }) => {
-    const items = Object.values(node).sort((a, b) => {
-      // Folders first, then files
-      if (a.isFolder && !b.isFolder) return -1;
-      if (!a.isFolder && b.isFolder) return 1;
-      // Alphabetical
-      return a.name.localeCompare(b.name);
-    });
-    
-    return (
-      <>
-        {items.map((item) => {
-          const fullPath = item.fullPath || `${parentPath}/${item.name}`.replace(/^\//, '');
-          
-          if (item.isFolder) {
-            const isExpanded = expandedFolders.has(fullPath);
-            const childCount = Object.keys(item.children).length;
-            
-            return (
-              <div key={fullPath} className="folder-container">
-                <div 
-                  className={`file-tree-item folder-item ${isExpanded ? 'expanded' : ''}`}
-                  onClick={(e) => toggleFolder(fullPath, e)}
-                  style={{ paddingLeft: `${level * 16 + 16}px` }}
-                >
-                  <div className="folder-icon">
-                    <ChevronRight size={12} className={`folder-chevron ${isExpanded ? 'expanded' : ''}`} />
-                    <Folder size={14} />
-                  </div>
-                  <span className="folder-name">{item.name}</span>
-                  {childCount > 0 && (
-                    <span className="folder-count">{childCount}</span>
-                  )}
-                </div>
-                {isExpanded && item.children && (
-                  <div className="folder-children">
-                    <FileTreeComponent node={item.children} level={level + 1} parentPath={fullPath} />
-                  </div>
-                )}
-              </div>
-            );
-          } else {
-            const isSelected = selectedFile?.path === item.path;
-            
-            return (
-              <div 
-                key={item.id}
-                className={`file-tree-item file-item ${isSelected ? 'selected' : ''}`}
-                onClick={(e) => handleFileSelect(item, e)}
-                style={{ paddingLeft: `${level * 16 + 32}px` }}
-              >
-                <div className="file-icon">
-                  <FileText size={14} />
-                </div>
-                <span className="file-name">{item.name}</span>
-                <span className="file-language-badge">{item.language}</span>
-              </div>
-            );
-          }
-        })}
-      </>
-    );
-  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect]);
-
-  // 🎯 CRITICAL: Memoize the entire tree panel to prevent re-renders
-  const TreePanel = useMemo(() => (
-    (!isMobile || mobilePanel === 'tree') && (
-      <div className="file-tree-panel">
-        <div className="panel-header">
-          <div className="panel-title">
-            <FolderOpen size={16} />
-            <span>Project Files</span>
-            <span className="file-count">{currentArtifacts.length}</span>
-          </div>
-          <div className="panel-actions-wrapper">
-            <button 
-              onClick={() => setShowCreateMenu(!showCreateMenu)}
-              className="icon-button small"
-              aria-label="Create new file or folder"
-            >
-              <Plus size={14} />
-            </button>
-            <button 
-              onClick={toggleArtifactsPanel}
-              className="icon-button small"
-              aria-label="Close files panel"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-        
-        {showCreateMenu && (
-          <CreateMenu onClose={() => setShowCreateMenu(false)} />
-        )}
-        
-        {creatingFolder && (
-          <FolderCreationInput />
-        )}
-        
-        <div className="search-box">
-          <Search size={14} />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search files..."
-            className="search-input"
-            aria-label="Search files"
-          />
-          {searchTerm && (
-            <button onClick={() => setSearchTerm('')} className="search-clear" aria-label="Clear search">
-              <X size={12} />
-            </button>
-          )}
-        </div>
-        
-        <div className="file-tree-container">
-          {currentArtifacts.length === 0 ? (
-            <div className="empty-tree-state">
-              <FileCode size={24} />
-              <p>No files yet</p>
-              <button 
-                onClick={() => handleCreateNewFile()}
-                className="create-first-file-btn small"
-              >
-                <FilePlus size={12} />
-                Create First File
-              </button>
-            </div>
-          ) : (
-            <div className="file-tree">
-              <FileTreeComponent node={filteredFileTree} />
-            </div>
-          )}
-        </div>
-      </div>
-    )
-  ), [
-    isMobile, 
-    mobilePanel, 
-    currentArtifacts.length, 
-    showCreateMenu, 
-    creatingFolder, 
-    searchTerm,
-    filteredFileTree,
-    FileTreeComponent
-  ]);
-
-  // 🎯 CRITICAL: Memoize the editor panel to prevent re-renders
-  const EditorPanel = useMemo(() => (
-    (!isMobile || mobilePanel === 'editor') && (
-      <div className="file-editor-panel">
-        {isMobile && (
-          <div className="mobile-editor-header">
-            <button 
-              onClick={() => setMobilePanel('tree')}
-              className="mobile-back-btn"
-              aria-label="Back to files"
-            >
-              <ChevronLeft size={16} />
-              Back to Files
-            </button>
-            <span className="mobile-file-count">{currentArtifacts.length} files</span>
-          </div>
-        )}
-        
-        {selectedFile ? (
-          <div className="editor-container">
-            <div className="editor-header">
-              <div className="file-info">
-                <FileCode size={16} />
-                <div className="file-details">
-                  <span className="file-path">{selectedFile.path}</span>
-                  <span className="file-language">{selectedFile.language}</span>
-                </div>
-              </div>
-              
-              <div className="editor-actions">
-                <button 
-                  onClick={() => setViewMode(prev => prev === 'editor' ? 'preview' : 'editor')} 
-                  className="icon-button small"
-                  aria-label={viewMode === 'editor' ? 'Switch to preview mode' : 'Switch to edit mode'}
-                >
-                  {viewMode === 'editor' ? <Eye size={14} /> : <EyeOff size={14} />}
-                </button>
-                {isEditing ? (
-                  <>
-                    <button onClick={handleSave} className="icon-button small success" aria-label="Save changes">
-                      <Check size={14} />
-                    </button>
-                    <button onClick={handleCancelEdit} className="icon-button small" aria-label="Cancel edit">
-                      <X size={14} />
-                    </button>
-                  </>
-                ) : (
-                  <button onClick={() => setIsEditing(true)} className="icon-button small" aria-label="Edit file">
-                    <Edit size={14} />
-                  </button>
-                )}
-                <button 
-                  onClick={() => navigator.clipboard.writeText(selectedFile.content)} 
-                  className="icon-button small"
-                  aria-label="Copy file content"
-                >
-                  <Copy size={14} />
-                </button>
-                <button 
-                  onClick={(e) => handleDelete(selectedFile.path, e)} 
-                  className="icon-button small danger"
-                  aria-label="Delete file"
-                >
-                  <Trash2 size={14} />
-                </button>
-                <button 
-                  onClick={() => {
-                    if (selectedFile) {
-                      const artifactToAdd = {
-                        ...selectedFile,
-                        id: generateSafeId(selectedFile.path),
-                        timestamp: new Date().toISOString()
-                      };
-                      handleArtifactUpdate([...currentArtifacts, artifactToAdd]);
-                    }
-                  }}
-                  className="icon-button small primary"
-                  aria-label="Add to project"
-                  title="Add to project"
-                >
-                  <Plus size={14} />
-                </button>
-              </div>
-            </div>
-            
-            <div className="editor-content">
-              {viewMode === 'editor' ? (
-                <textarea
-                  ref={editorTextareaRef}
-                  defaultValue={selectedFile.content}
-                  onChange={handleEditorChange}
-                  onCompositionStart={handleCompositionStart}
-                  onCompositionEnd={handleCompositionEnd}
-                  className={`code-editor ${isAndroidRef.current ? 'android' : ''}`}
-                  spellCheck="false"
-                  disabled={!isEditing}
-                  aria-label="Code editor"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  data-gramm="false"
-                  data-gramm_editor="false"
-                  data-enable-grammarly="false"
-                  // 🎯 CRITICAL: Prevent any React interference
-                  suppressHydrationWarning
-                  // 🎯 CRITICAL: Don't let React control this input
-                  key={`editor-${selectedFile.id}-${isEditing ? 'editing' : 'readonly'}`}
-                />
-              ) : (
-                <div className="code-preview">
-                  <SyntaxHighlighter 
-                    language={selectedFile.language} 
-                    style={oneDark} 
-                    showLineNumbers={true} 
-                    wrapLongLines={false}
-                  >
-                    {selectedFile.content}
-                  </SyntaxHighlighter>
-                </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="no-file-selected">
-            <FileCode size={48} />
-            <h3>No file selected</h3>
-            <p>Select a file from the sidebar to view or edit its contents</p>
-            <button 
-              onClick={() => handleCreateNewFile()} 
-              className="create-file-button"
-              aria-label="Create new file"
-            >
-              <FilePlus size={16} />Create New File
-            </button>
-          </div>
-        )}
-      </div>
-    )
-  ), [
-    isMobile,
-    mobilePanel,
-    currentArtifacts.length,
-    selectedFile,
-    viewMode,
-    isEditing,
-    handleSave,
-    handleCancelEdit,
-    handleDelete,
-    handleEditorChange,
-    handleCompositionStart,
-    handleCompositionEnd
-  ]);
-
-  // 🎯 CRITICAL: Return memoized components
-  return (
-    <div className={`artifact-manager ${isMobile ? 'mobile' : ''} ${isAndroidRef.current ? 'android' : ''}`}>
-      {TreePanel}
-      {EditorPanel}
-    </div>
-  );
-}, (prevProps, nextProps) => {
-  // 🎯 CRITICAL: Custom comparison to prevent unnecessary re-renders
-  return (
-    prevProps.isMobile === nextProps.isMobile &&
-    prevProps.currentConversationId === nextProps.currentConversationId
-  );
-});
-
-  // 🎯 EMPTY ARTIFACTS PLACEHOLDER COMPONENT
-  const EmptyArtifactsPlaceholder = React.memo(() => {
-    return (
-      <div className="empty-artifacts-placeholder">
-        <div className="empty-artifacts-icon">
-          <FileCode size={48} />
-        </div>
-        <h3>No Project Files Yet</h3>
-        <p>Start by creating your first file or ask the AI to generate code</p>
-        <div className="empty-actions">
-          <button 
-            onClick={() => handleCreateNewFile()}
-            className="create-first-file-btn"
-          >
-            <FilePlus size={16} />
-            Create First File
-          </button>
-          <button 
-            onClick={() => {
-              setInput("Create a new project with basic structure");
-              textareaRef.current?.focus();
-            }}
-            className="ask-ai-btn"
-          >
-            <Bot size={16} />
-            Ask AI to Start Project
-          </button>
-        </div>
-      </div>
-    );
-  });
-
-  // 🎯 CREATE MENU COMPONENT
-  const CreateMenu = React.memo(({ onClose }) => {
-    const menuRef = useRef(null);
-
-    useEffect(() => {
-      const handleClickOutside = (event) => {
-        if (menuRef.current && !menuRef.current.contains(event.target)) {
-          onClose();
-        }
-      };
-      
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [onClose]);
-
-    return (
-      <div className="create-menu" ref={menuRef}>
-        <button 
-          className="create-menu-item"
-          onClick={() => {
-            handleCreateNewFile();
-            onClose();
-          }}
-        >
-          <FilePlus size={16} />
-          <span>New File</span>
-        </button>
-        <button 
-          className="create-menu-item"
-          onClick={() => {
-            setCreatingFolder(true);
-            onClose();
-          }}
-        >
-          <FolderPlus size={16} />
-          <span>New Folder</span>
-        </button>
-      </div>
-    );
-  });
-
-  // 🎯 FOLDER CREATION INPUT
-  const FolderCreationInput = React.memo(() => {
-    const handleSubmit = (e) => {
-      e.preventDefault();
-      handleCreateNewFolder();
-    };
-
-    const handleCancel = () => {
-      setCreatingFolder(false);
-      setNewFolderName('');
-    };
-
-    return (
-      <div className="folder-creation-input">
-        <form onSubmit={handleSubmit}>
-          <input
-            ref={folderInputRef}
-            type="text"
-            value={newFolderName}
-            onChange={(e) => setNewFolderName(e.target.value)}
-            placeholder="Folder name"
-            className="folder-input"
-            autoFocus
-          />
-          <div className="folder-input-actions">
-            <button type="submit" className="folder-input-btn primary">
-              Create
-            </button>
-            <button type="button" className="folder-input-btn" onClick={handleCancel}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      </div>
-    );
-  });
-
-  // 🎯 CHILD COMPONENTS
+  // 🎯 OPTIMIZED SUB-COMPONENTS
   const SystemPromptInput = React.memo(({ isVisible, onClose }) => {
     const textareaRef = useRef(null);
 
@@ -4106,7 +3999,6 @@ const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
       const { result, appliedCount, failedOps } = applySearchReplace(file.content, edit.operations);
       setPreviewResult({ result, appliedCount, failedOps });
     } else if (!file.content && edit.operations) {
-      // 🎯 FIX: Show warning if file exists but has no content
       console.warn('File exists but has no content:', edit.path);
       setPreviewResult({ 
         result: '', 
@@ -4123,7 +4015,6 @@ const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
     const handleApply = useCallback(async () => {
       setApplying(true);
       try {
-        // Directly call handleApplyEditFromViewer with the edit
         handleApplyEditFromViewer(edit);
         setTimeout(() => {
           onClose();
@@ -4251,6 +4142,37 @@ const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
     );
   });
 
+  const EmptyArtifactsPlaceholder = React.memo(() => {
+    return (
+      <div className="empty-artifacts-placeholder">
+        <div className="empty-artifacts-icon">
+          <FileCode size={48} />
+        </div>
+        <h3>No Project Files Yet</h3>
+        <p>Start by creating your first file or ask the AI to generate code</p>
+        <div className="empty-actions">
+          <button 
+            onClick={() => handleCreateNewFile()}
+            className="create-first-file-btn"
+          >
+            <FilePlus size={16} />
+            Create First File
+          </button>
+          <button 
+            onClick={() => {
+              setInput("Create a new project with basic structure");
+              textareaRef.current?.focus();
+            }}
+            className="ask-ai-btn"
+          >
+            <Bot size={16} />
+            Ask AI to Start Project
+          </button>
+        </div>
+      </div>
+    );
+  });
+
   // 🎯 MAIN RENDER
   return (
     <ErrorBoundary>
@@ -4324,6 +4246,24 @@ const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
               <ArtifactManager 
                 isMobile={isMobile} 
                 currentConversationId={currentConversationId}
+                currentArtifacts={currentArtifacts}
+                selectedFile={selectedFile}
+                isEditing={isEditing}
+                viewMode={viewMode}
+                mobilePanel={mobilePanel}
+                searchTerm={searchTerm}
+                expandedFolders={expandedFolders}
+                onSelectFile={setSelectedFile}
+                onSetEditing={setIsEditing}
+                onSetViewMode={setViewMode}
+                onSetMobilePanel={setMobilePanel}
+                onSetSearchTerm={setSearchTerm}
+                onSetExpandedFolders={setExpandedFolders}
+                onSaveFile={handleSaveFile}
+                onCancelEdit={() => setIsEditing(false)}
+                onDeleteFile={handleDeleteFile}
+                onCreateFile={handleCreateNewFile}
+                onCreateFolder={handleCreateNewFolder}
               />
             </div>
           )}
@@ -4341,29 +4281,15 @@ const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
                 ) : (
                   <AnimatePresence initial={false}>
                     {messages.slice(-30).map((m) => (
-                      <motion.div
+                      <MessageRow
                         key={m.id}
-                        layout
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -8 }}
-                        className={`message-row ${m.role === "user" ? "message-row-user" : "message-row-assistant"}`}
-                      >
-                        <Avatar role={m.role} />
-                        <div className={`bubble ${m.role === "user" ? "bubble-user" : m.isError ? "bubble-error" : "bubble-assistant"}`}>
-                          {renderMessage(m)}
-                          {m.isStreaming && (
-                            <div className="typing-dots-container">
-                              <div className="typing-dots"><span></span><span></span><span></span></div>
-                            </div>
-                          )}
-                          {!m.isStreaming && m.role === "assistant" && (
-                            <button onClick={() => copyToClipboard(m.content, m.id)} className="copy-button" aria-label="Copy message">
-                              {copied === m.id ? <Check className="icon-small" /> : <Copy className="icon-small" />}
-                            </button>
-                          )}
-                        </div>
-                      </motion.div>
+                        message={m}
+                        copied={copied}
+                        onCopy={copyToClipboard}
+                        onViewEdit={handleViewEdit}
+                        onAddToProject={handleAddToProject}
+                        currentArtifacts={currentArtifacts}
+                      />
                     ))}
                   </AnimatePresence>
                 )}
