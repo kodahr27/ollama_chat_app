@@ -662,7 +662,7 @@ export default function App() {
       const edits = [];
       let regularContent = limitedMessage;
 
-      const editBlockRegex = /```(?:edit)?\s*\r?\n([\s\S]*?)\r?\n```/gi;
+      const editBlockRegex = /```(?:edit)?\s*\r?\n([\s\S]*?)```/gi;
       const editBlocks = [];
       let editMatch;
       
@@ -1060,54 +1060,53 @@ export default function App() {
     }
   }, [artifacts, conversations]);
 
-// Replace the findTargetFileForEdit function with this improved version:
-const findTargetFileForEdit = useCallback((artifacts, editPath) => {
-  if (!artifacts || artifacts.length === 0) return null;
-  
-  const limitedArtifacts = artifacts.slice(0, 50);
-  
-  const normalizePath = (path) => {
-    if (!path) return '';
-    return path.toLowerCase()
-      .replace(/\\/g, '/')
-      .replace(/^\.?\//, '')
-      .replace(/\s+/g, '-')
-      .trim();
-  };
-  
-  const normalizedEditPath = normalizePath(editPath);
-  
-  // 🎯 FIX 1: Exact match first
-  for (const art of limitedArtifacts) {
-    if (normalizePath(art.path) === normalizedEditPath) return art;
-  }
-  
-  // 🎯 FIX 2: Match by filename only (without path)
-  const editFileName = normalizedEditPath.split('/').pop();
-  for (const art of limitedArtifacts) {
-    const artFileName = normalizePath(art.path).split('/').pop();
-    if (artFileName === editFileName) return art;
-  }
-  
-  // 🎯 FIX 3: Partial match (file contains edit path or vice versa)
-  for (const art of limitedArtifacts) {
-    const normalizedArtPath = normalizePath(art.path);
-    if (normalizedArtPath.includes(normalizedEditPath) || 
-        normalizedEditPath.includes(normalizedArtPath)) {
-      return art;
+  const findTargetFileForEdit = useCallback((artifacts, editPath) => {
+    if (!artifacts || artifacts.length === 0) return null;
+    
+    const limitedArtifacts = artifacts.slice(0, 50);
+    
+    const normalizePath = (path) => {
+      if (!path) return '';
+      return path.toLowerCase()
+        .replace(/\\/g, '/')
+        .replace(/^\.?\//, '')
+        .replace(/\s+/g, '-')
+        .trim();
+    };
+    
+    const normalizedEditPath = normalizePath(editPath);
+    
+    // 🎯 FIX 1: Exact match first
+    for (const art of limitedArtifacts) {
+      if (normalizePath(art.path) === normalizedEditPath) return art;
     }
-  }
-  
-  // 🎯 FIX 4: Case-insensitive contains match
-  for (const art of limitedArtifacts) {
-    if (art.path.toLowerCase().includes(editPath.toLowerCase()) ||
-        editPath.toLowerCase().includes(art.path.toLowerCase())) {
-      return art;
+    
+    // 🎯 FIX 2: Match by filename only (without path)
+    const editFileName = normalizedEditPath.split('/').pop();
+    for (const art of limitedArtifacts) {
+      const artFileName = normalizePath(art.path).split('/').pop();
+      if (artFileName === editFileName) return art;
     }
-  }
-  
-  return null;
-}, []);
+    
+    // 🎯 FIX 3: Partial match (file contains edit path or vice versa)
+    for (const art of limitedArtifacts) {
+      const normalizedArtPath = normalizePath(art.path);
+      if (normalizedArtPath.includes(normalizedEditPath) || 
+          normalizedEditPath.includes(normalizedArtPath)) {
+        return art;
+      }
+    }
+    
+    // 🎯 FIX 4: Case-insensitive contains match
+    for (const art of limitedArtifacts) {
+      if (art.path.toLowerCase().includes(editPath.toLowerCase()) ||
+          editPath.toLowerCase().includes(art.path.toLowerCase())) {
+        return art;
+      }
+    }
+    
+    return null;
+  }, []);
 
   // 🎯 FIXED: getEnhancedFileContext now uses currentArtifacts to get latest content
   const getEnhancedFileContext = useCallback((artifacts, userInput) => {
@@ -1331,6 +1330,23 @@ const findTargetFileForEdit = useCallback((artifacts, editPath) => {
       return () => clearTimeout(timer);
     }
   }, [messages.length]);
+
+  // 🎯 IOS KEYBOARD FIX: Prevent focus loss on re-renders
+  useEffect(() => {
+    // Store the current active element before any state change
+    const activeElement = document.activeElement;
+    
+    // After state updates, restore focus if it was on a textarea
+    const timer = setTimeout(() => {
+      if (activeElement && 
+          (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT') &&
+          document.activeElement !== activeElement) {
+        activeElement.focus();
+      }
+    }, 50);
+    
+    return () => clearTimeout(timer);
+  }, [input, editedContent, messages]);
 
   // 🎯 EVENT HANDLERS
   const handleImageSelect = useCallback((file) => {
@@ -1558,21 +1574,34 @@ const findTargetFileForEdit = useCallback((artifacts, editPath) => {
     input.click();
   }, [saveArtifacts]);
 
-// Update the handleInputChange function:
-const handleInputChange = useCallback((e) => {
-  const value = e.target.value;
-  if (value.length <= APP_CONFIG.LIMITS.MAX_INPUT_LENGTH) {
-    setInput(value);
-    const ta = textareaRef.current;
-    if (ta) { 
-      // 🎯 FIX: Use requestAnimationFrame to prevent iOS keyboard closing
-      requestAnimationFrame(() => {
-        ta.style.height = "auto"; 
-        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-      });
+  // 🎯 FIXED: iOS Keyboard Compatible Input Change Handler
+  const handleInputChange = useCallback((e) => {
+    const value = e.target.value;
+    
+    // Prevent excessive re-renders
+    if (value === input && textareaRef.current) {
+      return;
     }
-  }
-}, []);
+    
+    if (value.length <= APP_CONFIG.LIMITS.MAX_INPUT_LENGTH) {
+      setInput(value);
+      
+      const ta = textareaRef.current;
+      if (ta) { 
+        // 🎯 CRITICAL: Use setTimeout with 0 for iOS compatibility
+        setTimeout(() => {
+          ta.style.height = "auto"; 
+          const newHeight = Math.min(ta.scrollHeight, 200);
+          ta.style.height = `${newHeight}px`;
+          
+          // 🎯 Ensure focus is maintained on iOS
+          if (document.activeElement !== ta) {
+            ta.focus();
+          }
+        }, 0);
+      }
+    }
+  }, [input]);
 
   const fetchModels = useCallback(async (isRetry = false) => {
     setIsLoadingModels(true);
@@ -1628,30 +1657,30 @@ const handleInputChange = useCallback((e) => {
     return getEnhancedFileContext(currentArtifactsRef.current, input);
   }, [getEnhancedFileContext, input]);
 
-const handleCreateNewFile = useCallback((folderPath = '') => {
-  // Prevent default behavior that might close keyboard
-  const defaultExtensions = {
-    'src/components': '.jsx',
-    'src': '.js',
-    'styles': '.css',
-    'utils': '.js',
-    'public': '.html',
-    '': '.txt'
-  };
-  
-  let extension = '.txt';
-  for (const [path, ext] of Object.entries(defaultExtensions)) {
-    if (folderPath.includes(path) || (!folderPath && path === '')) {
-      extension = ext;
-      break;
+  const handleCreateNewFile = useCallback((folderPath = '') => {
+    // Prevent default behavior that might close keyboard
+    const defaultExtensions = {
+      'src/components': '.jsx',
+      'src': '.js',
+      'styles': '.css',
+      'utils': '.js',
+      'public': '.html',
+      '': '.txt'
+    };
+    
+    let extension = '.txt';
+    for (const [path, ext] of Object.entries(defaultExtensions)) {
+      if (folderPath.includes(path) || (!folderPath && path === '')) {
+        extension = ext;
+        break;
+      }
     }
-  }
-  
-  const newFileName = `${folderPath ? folderPath + '/' : ''}new-file-${Date.now()}${extension}`;
-  const language = getLanguageFromPath(newFileName);
-  
-  const defaultContent = {
-    'jsx': `// ${newFileName}
+    
+    const newFileName = `${folderPath ? folderPath + '/' : ''}new-file-${Date.now()}${extension}`;
+    const language = getLanguageFromPath(newFileName);
+    
+    const defaultContent = {
+      'jsx': `// ${newFileName}
 import React from 'react';
 
 export default function NewComponent() {
@@ -1661,15 +1690,15 @@ export default function NewComponent() {
     </div>
   );
 }`,
-    'js': `// ${newFileName}
+      'js': `// ${newFileName}
 function newFunction() {
   console.log('Hello World');
 }`,
-    'css': `/* ${newFileName} */
+      'css': `/* ${newFileName} */
 .new-class {
   color: blue;
 }`,
-    'html': `<!-- ${newFileName} -->
+      'html': `<!-- ${newFileName} -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -1679,85 +1708,85 @@ function newFunction() {
   <h1>New File</h1>
 </body>
 </html>`,
-    'py': `# ${newFileName}
+      'py': `# ${newFileName}
 def main():
     print("Hello World")
 
 if __name__ == "__main__":
     main()`,
-    'json': `{
+      'json': `{
   "name": "new-file",
   "version": "1.0.0"
 }`
-  }[language] || `// ${newFileName}\n// New file created`;
+    }[language] || `// ${newFileName}\n// New file created`;
 
-  const newFile = {
-    path: newFileName,
-    content: defaultContent,
-    language: language,
-    id: generateSafeId(newFileName),
-    name: newFileName.split('/').pop(),
-    fullPath: newFileName,
-    type: 'file',
-    createdBy: 'user',
-    timestamp: new Date().toISOString()
-  };
-  
-  // 🎯 FIX: Ensure we have a conversation to save to
-  let convId = currentConversationId;
-  if (!convId) {
-    convId = generateSafeId('conv');
-    const newConversation = {
-      id: convId,
-      title: 'New Conversation',
-      messages: [],
-      lastUpdated: new Date().toISOString(),
-      active: true,
-      artifactCount: 1
+    const newFile = {
+      path: newFileName,
+      content: defaultContent,
+      language: language,
+      id: generateSafeId(newFileName),
+      name: newFileName.split('/').pop(),
+      fullPath: newFileName,
+      type: 'file',
+      createdBy: 'user',
+      timestamp: new Date().toISOString()
     };
     
-    const savedConversations = JSON.parse(localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS) || '[]');
-    const updatedConversations = [newConversation, ...savedConversations.map(c => ({ ...c, active: false }))];
+    // 🎯 FIX: Ensure we have a conversation to save to
+    let convId = currentConversationId;
+    if (!convId) {
+      convId = generateSafeId('conv');
+      const newConversation = {
+        id: convId,
+        title: 'New Conversation',
+        messages: [],
+        lastUpdated: new Date().toISOString(),
+        active: true,
+        artifactCount: 1
+      };
+      
+      const savedConversations = JSON.parse(localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS) || '[]');
+      const updatedConversations = [newConversation, ...savedConversations.map(c => ({ ...c, active: false }))];
+      
+      localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
+      setConversations(updatedConversations);
+      setCurrentConversationId(convId);
+    }
     
-    localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
-    setConversations(updatedConversations);
-    setCurrentConversationId(convId);
-  }
-  
-  const updatedArtifacts = [...currentArtifacts, newFile];
-  
-  // 🎯 SAVE IMMEDIATELY
-  setArtifacts(prev => ({ 
-    ...prev, 
-    [convId]: updatedArtifacts 
-  }));
-  
-  const updatedArtifactsObj = { 
-    ...artifacts, 
-    [convId]: updatedArtifacts 
-  };
-  
-  saveArtifacts(updatedArtifactsObj);
-  
-  setSelectedFile(newFile);
-  setEditedContent(newFile.content);
-  setIsEditing(true);
-  setViewMode('editor');
-  
-  if (isMobile) {
-    setMobilePanel('editor');
-  }
-  
-  setShowEmptyState(false);
-  setShowArtifacts(true);
-  setShowCreateMenu(false);
-  
-  // Focus on the editor
-  setTimeout(() => {
-    const editor = document.querySelector('.code-editor');
-    if (editor) editor.focus();
-  }, 100);
-}, [currentConversationId, currentArtifacts, artifacts, saveArtifacts, isMobile]);
+    const updatedArtifacts = [...currentArtifacts, newFile];
+    
+    // 🎯 SAVE IMMEDIATELY
+    setArtifacts(prev => ({ 
+      ...prev, 
+      [convId]: updatedArtifacts 
+    }));
+    
+    const updatedArtifactsObj = { 
+      ...artifacts, 
+      [convId]: updatedArtifacts 
+    };
+    
+    saveArtifacts(updatedArtifactsObj);
+    
+    setSelectedFile(newFile);
+    setEditedContent(newFile.content);
+    setIsEditing(true);
+    setViewMode('editor');
+    
+    if (isMobile) {
+      setMobilePanel('editor');
+    }
+    
+    setShowEmptyState(false);
+    setShowArtifacts(true);
+    setShowCreateMenu(false);
+    
+    // Focus on the editor
+    setTimeout(() => {
+      const editor = document.querySelector('.code-editor');
+      if (editor) editor.focus();
+    }, 100);
+  }, [currentConversationId, currentArtifacts, artifacts, saveArtifacts, isMobile]);
 
   // 🎯 CREATE NEW FOLDER FUNCTION
   const handleCreateNewFolder = useCallback((parentPath = '') => {
@@ -2129,101 +2158,100 @@ if __name__ == "__main__":
     setViewingEdit(edit);
   }, []);
 
-// Replace the handleApplyEditFromViewer function:
-const handleApplyEditFromViewer = useCallback((edit) => {
-  if (!edit) return;
-  
-  let targetFile = findTargetFileForEdit(currentArtifacts, edit.path);
-  
-  if (!targetFile) {
-    console.error('Target file not found:', edit.path, 'Available files:', currentArtifacts.map(f => f.path));
+  const handleApplyEditFromViewer = useCallback((edit) => {
+    if (!edit) return;
     
-    // 🎯 FIX: Try to find file by showing a selection dialog
-    const matchingFiles = currentArtifacts.filter(art => 
-      art.path.toLowerCase().includes(edit.path.toLowerCase()) ||
-      edit.path.toLowerCase().includes(art.path.toLowerCase())
-    );
-    
-    if (matchingFiles.length === 1) {
-      // Auto-select if only one match
-      targetFile = matchingFiles[0];
-      console.log('Auto-selected file:', targetFile.path, 'for edit path:', edit.path);
-    } else if (matchingFiles.length > 0) {
-      // Let user choose if multiple matches
-      const fileNames = matchingFiles.map(f => f.path).join('\n');
-      const selected = prompt(
-        `Multiple files match "${edit.path}". Which file do you want to edit?\n\nAvailable files:\n${fileNames}\n\nEnter the exact filename:`,
-        matchingFiles[0].path
-      );
-      
-      if (selected) {
-        targetFile = matchingFiles.find(f => f.path === selected) || matchingFiles[0];
-      }
-    }
+    let targetFile = findTargetFileForEdit(currentArtifacts, edit.path);
     
     if (!targetFile) {
-      alert(`Error: File "${edit.path}" not found in current project.\n\nAvailable files:\n${currentArtifacts.map(f => f.path).join('\n')}`);
+      console.error('Target file not found:', edit.path, 'Available files:', currentArtifacts.map(f => f.path));
+      
+      // 🎯 FIX: Try to find file by showing a selection dialog
+      const matchingFiles = currentArtifacts.filter(art => 
+        art.path.toLowerCase().includes(edit.path.toLowerCase()) ||
+        edit.path.toLowerCase().includes(art.path.toLowerCase())
+      );
+      
+      if (matchingFiles.length === 1) {
+        // Auto-select if only one match
+        targetFile = matchingFiles[0];
+        console.log('Auto-selected file:', targetFile.path, 'for edit path:', edit.path);
+      } else if (matchingFiles.length > 0) {
+        // Let user choose if multiple matches
+        const fileNames = matchingFiles.map(f => f.path).join('\n');
+        const selected = prompt(
+          `Multiple files match "${edit.path}". Which file do you want to edit?\n\nAvailable files:\n${fileNames}\n\nEnter the exact filename:`,
+          matchingFiles[0].path
+        );
+        
+        if (selected) {
+          targetFile = matchingFiles.find(f => f.path === selected) || matchingFiles[0];
+        }
+      }
+      
+      if (!targetFile) {
+        alert(`Error: File "${edit.path}" not found in current project.\n\nAvailable files:\n${currentArtifacts.map(f => f.path).join('\n')}`);
+        return;
+      }
+    }
+    
+    const { result, appliedCount, failedOps } = applySearchReplace(
+      targetFile.content,
+      edit.operations
+    );
+    
+    if (appliedCount === 0) {
+      alert(`⚠️ No operations were applied. Please check that the search patterns match the current file content.`);
       return;
     }
-  }
-  
-  const { result, appliedCount, failedOps } = applySearchReplace(
-    targetFile.content,
-    edit.operations
-  );
-  
-  if (appliedCount === 0) {
-    alert(`⚠️ No operations were applied. Please check that the search patterns match the current file content.`);
-    return;
-  }
-  
-  const updatedArtifacts = currentArtifacts.map(art => 
-    art.path === targetFile.path 
-      ? { ...art, content: result }
-      : art
-  );
-  
-  handleArtifactUpdate(updatedArtifacts);
-  
-  // Mark the edit as applied in the message
-  if (viewingEdit) {
-    setMessages(prev => prev.map(msg => {
-      if (msg.parsedResponse?.edits) {
-        const updatedEdits = msg.parsedResponse.edits.map(e => 
-          e.id === edit.id ? { ...e, applied: true, targetFile: targetFile.path } : e
-        );
-        return {
-          ...msg,
-          parsedResponse: {
-            ...msg.parsedResponse,
-            edits: updatedEdits
-          }
-        };
-      }
-      return msg;
-    }));
-  }
-  
-  if (appliedCount === edit.operations.length) {
-    alert(`✅ Successfully applied all ${appliedCount} changes to ${targetFile.path}`);
-  } else {
-    let message = `Applied ${appliedCount} of ${edit.operations.length} changes to ${targetFile.path}.`;
     
-    if (failedOps.length > 0) {
-      message += `\n\n${failedOps.length} operation(s) failed:`;
-      failedOps.slice(0, 3).forEach(f => {
-        message += `\n• Operation ${f.index}: ${f.reason}`;
-      });
-      if (failedOps.length > 3) {
-        message += `\n• ... and ${failedOps.length - 3} more`;
-      }
+    const updatedArtifacts = currentArtifacts.map(art => 
+      art.path === targetFile.path 
+        ? { ...art, content: result }
+        : art
+    );
+    
+    handleArtifactUpdate(updatedArtifacts);
+    
+    // Mark the edit as applied in the message
+    if (viewingEdit) {
+      setMessages(prev => prev.map(msg => {
+        if (msg.parsedResponse?.edits) {
+          const updatedEdits = msg.parsedResponse.edits.map(e => 
+            e.id === edit.id ? { ...e, applied: true, targetFile: targetFile.path } : e
+          );
+          return {
+            ...msg,
+            parsedResponse: {
+              ...msg.parsedResponse,
+              edits: updatedEdits
+            }
+          };
+        }
+        return msg;
+      }));
     }
     
-    alert(message);
-  }
-  
-  setViewingEdit(null);
-}, [currentArtifacts, handleArtifactUpdate, findTargetFileForEdit, applySearchReplace, viewingEdit]);
+    if (appliedCount === edit.operations.length) {
+      alert(`✅ Successfully applied all ${appliedCount} changes to ${targetFile.path}`);
+    } else {
+      let message = `Applied ${appliedCount} of ${edit.operations.length} changes to ${targetFile.path}.`;
+      
+      if (failedOps.length > 0) {
+        message += `\n\n${failedOps.length} operation(s) failed:`;
+        failedOps.slice(0, 3).forEach(f => {
+          message += `\n• Operation ${f.index}: ${f.reason}`;
+        });
+        if (failedOps.length > 3) {
+          message += `\n• ... and ${failedOps.length - 3} more`;
+        }
+      }
+      
+      alert(message);
+    }
+    
+    setViewingEdit(null);
+  }, [currentArtifacts, handleArtifactUpdate, findTargetFileForEdit, applySearchReplace, viewingEdit]);
 
   // 🎯 RENDER FUNCTIONS
   const renderMessage = useCallback((message) => {
@@ -3496,7 +3524,6 @@ const handleApplyEditFromViewer = useCallback((edit) => {
       [currentArtifacts, edit.path]
     );
 
-  // Update the useEffect in DiffViewerPage to handle missing files better:
   useEffect(() => {
     if (edit.operations && file.content) {
       const { result, appliedCount, failedOps } = applySearchReplace(file.content, edit.operations);
@@ -3675,65 +3702,47 @@ const handleApplyEditFromViewer = useCallback((edit) => {
       setShowEmptyState(false);
     }, [isMobile]);
   
-// In the ArtifactManager component, replace the handleSave function:
-  const handleSave = useCallback(() => {
-    if (selectedFile) {
-      const updatedArtifacts = currentArtifacts.map(art => 
-        art.path === selectedFile.path ? { ...art, content: editedContent } : art
-      );
-      
-      // 🎯 FIX: Batch the updates to prevent re-renders
-      setArtifacts(prev => ({ 
-        ...prev, 
-        [currentConversationId]: updatedArtifacts 
-      }));
-      
-      const updatedArtifactsObj = { 
-        ...artifacts, 
-        [currentConversationId]: updatedArtifacts 
-      };
-      
-      saveArtifacts(updatedArtifactsObj);
-      
-      setIsEditing(false);
-      setShowEmptyState(false);
-      
-      // 🎯 FIX: Update selectedFile content without causing re-render
-      setSelectedFile(prev => prev ? { ...prev, content: editedContent } : null);
-    }
-  }, [selectedFile, editedContent, currentArtifacts, currentConversationId, artifacts, saveArtifacts]);
-
-  // 🎯 ADD: Debounced content update to prevent keyboard closing
-  const handleEditorChange = useCallback((e) => {
-    const value = e.target.value;
-    setEditedContent(value);
-    
-    // 🎯 FIX: Use requestAnimationFrame to prevent keyboard closing
-    requestAnimationFrame(() => {
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
-        textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    // 🎯 FIXED: iOS Keyboard Compatible Save Handler
+    const handleSave = useCallback(() => {
+      if (selectedFile) {
+        const updatedArtifacts = currentArtifacts.map(art => 
+          art.path === selectedFile.path ? { ...art, content: editedContent } : art
+        );
+        
+        // 🎯 FIX: Batch the updates to prevent re-renders
+        setArtifacts(prev => ({ 
+          ...prev, 
+          [currentConversationId]: updatedArtifacts 
+        }));
+        
+        const updatedArtifactsObj = { 
+          ...artifacts, 
+          [currentConversationId]: updatedArtifacts 
+        };
+        
+        saveArtifacts(updatedArtifactsObj);
+        
+        setIsEditing(false);
+        setShowEmptyState(false);
+        
+        // 🎯 FIX: Update selectedFile content without causing re-render
+        setSelectedFile(prev => prev ? { ...prev, content: editedContent } : null);
       }
-    });
-  }, []);
+    }, [selectedFile, editedContent, currentArtifacts, currentConversationId, artifacts, saveArtifacts]);
 
-  // 🎯 UPDATE: The editor textarea in the ArtifactManager
-  <textarea
-    ref={textareaRef}
-    value={editedContent}
-    onChange={handleEditorChange} // Use the new handler
-    className="code-editor"
-    spellCheck="false"
-    disabled={!isEditing}
-    aria-label="Code editor"
-    onBlur={(e) => {
-      // 🎯 FIX: Prevent losing focus on mobile
-      if (isMobile && isEditing) {
-        e.preventDefault();
-        setTimeout(() => e.target.focus(), 10);
-      }
-    }}
-  />
+    // 🎯 FIXED: iOS Keyboard Compatible Editor Change Handler
+    const handleEditorChange = useCallback((e) => {
+      const value = e.target.value;
+      setEditedContent(value);
+      
+      // 🎯 FIX: Use setTimeout for iOS compatibility
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+          textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+        }
+      }, 0);
+    }, []);
   
     const handleCancelEdit = useCallback(() => {
       if (selectedFile) setEditedContent(selectedFile.content);
@@ -4054,12 +4063,29 @@ const handleApplyEditFromViewer = useCallback((edit) => {
                 <div className="editor-content">
                   {viewMode === 'editor' ? (
                     <textarea
+                      ref={textareaRef}
                       value={editedContent}
-                      onChange={(e) => setEditedContent(e.target.value)}
+                      onChange={handleEditorChange}
                       className="code-editor"
                       spellCheck="false"
                       disabled={!isEditing}
                       aria-label="Code editor"
+                      onBlur={(e) => {
+                        // 🎯 FIX: Prevent losing focus on iOS when editing
+                        if (isMobile && isEditing) {
+                          e.preventDefault();
+                          // Small delay to allow other interactions
+                          setTimeout(() => {
+                            if (document.activeElement !== e.target) {
+                              e.target.focus();
+                            }
+                          }, 50);
+                        }
+                      }}
+                      // iOS-specific optimizations
+                      onTouchStart={(e) => e.stopPropagation()}
+                      onTouchMove={(e) => e.stopPropagation()}
+                      enterKeyHint="default"
                     />
                   ) : (
                     <div className="code-preview">
@@ -4245,17 +4271,28 @@ const handleApplyEditFromViewer = useCallback((edit) => {
                 disabled={isLoading}
                 maxLength={APP_CONFIG.LIMITS.MAX_INPUT_LENGTH}
                 aria-label="Message input"
-                // 🎯 ADD: Prevent iOS keyboard closing
+                // 🎯 ADD: iOS-specific keyboard fixes
                 onTouchStart={(e) => {
                   if (isMobile) {
+                    // Prevent default touch behaviors that might close keyboard
                     e.stopPropagation();
                   }
                 }}
-                onTouchEnd={(e) => {
+                onTouchMove={(e) => {
                   if (isMobile) {
+                    // Allow scrolling but keep keyboard open
                     e.stopPropagation();
                   }
                 }}
+                onBlur={(e) => {
+                  // 🎯 PREVENT UNWANTED BLUR ON IOS
+                  if (isMobile && isLoading) {
+                    e.preventDefault();
+                    setTimeout(() => e.target.focus(), 10);
+                  }
+                }}
+                // Force iOS to show "Done" button instead of hiding keyboard
+                enterKeyHint="send"
               />
               <div className="input-actions">
                 <button onClick={() => fileInputRef.current?.click()} className="image-upload-button" disabled={isLoading} title="Attach image" aria-label="Attach image">
