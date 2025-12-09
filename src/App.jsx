@@ -372,6 +372,47 @@ const useTheme = () => {
   };
 };
 
+// 🎯 CUSTOM HOOK FOR MOBILE FOCUS MANAGEMENT
+const useMobileFocusFix = (ref, isActive) => {
+  useEffect(() => {
+    if (!ref.current || !isActive || !/android/i.test(navigator.userAgent)) return;
+    
+    const element = ref.current;
+    let blurTimeout = null;
+    
+    const handleBlur = (e) => {
+      // Check if blur is caused by something other than user action
+      if (!e.relatedTarget || e.relatedTarget.tagName === 'BODY') {
+        // This is likely caused by React re-render
+        blurTimeout = setTimeout(() => {
+          if (document.activeElement !== element && document.body.classList.contains('keyboard-open')) {
+            element.focus();
+            // Move cursor to end
+            const length = element.value.length;
+            element.setSelectionRange(length, length);
+          }
+        }, 50);
+      }
+    };
+    
+    const handleFocus = () => {
+      if (blurTimeout) {
+        clearTimeout(blurTimeout);
+        blurTimeout = null;
+      }
+    };
+    
+    element.addEventListener('blur', handleBlur);
+    element.addEventListener('focus', handleFocus);
+    
+    return () => {
+      if (blurTimeout) clearTimeout(blurTimeout);
+      element.removeEventListener('blur', handleBlur);
+      element.removeEventListener('focus', handleFocus);
+    };
+  }, [ref, isActive]);
+};
+
 // 🎯 COMPONENTS
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -2552,40 +2593,8 @@ const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
     }
   }, [selectedFile, isEditing]);
 
-  // Add this useEffect to handle focus state
-  useEffect(() => {
-    if (isEditing && selectedFile) {
-      const timer = setTimeout(() => {
-        if (editorTextareaRef.current) {
-          // Ensure we have focus
-          if (document.activeElement !== editorTextareaRef.current) {
-            editorTextareaRef.current.focus();
-          }
-          
-          // Add editing class for visual feedback
-          editorTextareaRef.current.classList.add('editing');
-          
-          // 🎯 FIX: For Android, ensure keyboard stays open
-          if (isAndroidRef.current) {
-            // Force a re-focus to keep keyboard open
-            setTimeout(() => {
-              if (editorTextareaRef.current && isEditing) {
-                editorTextareaRef.current.blur();
-                editorTextareaRef.current.focus();
-              }
-            }, 200);
-          }
-        }
-      }, 100);
-      
-      return () => {
-        clearTimeout(timer);
-        if (editorTextareaRef.current) {
-          editorTextareaRef.current.classList.remove('editing');
-        }
-      };
-    }
-  }, [isEditing, selectedFile]);
+  // Use the mobile focus fix hook
+  useMobileFocusFix(editorTextareaRef, isEditing);
 
   const toggleFolder = useCallback((folderPath, e) => {
     if (e) e.stopPropagation();
@@ -2614,88 +2623,98 @@ const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
     // Check if we're in composition mode (IME input)
     if (e.type === 'compositionstart') {
       isComposingRef.current = true;
+      e.target.setAttribute('data-composition', 'true');
     }
     if (e.type === 'compositionend') {
       isComposingRef.current = false;
+      e.target.setAttribute('data-composition', 'false');
     }
+    
+    // Store the current selection/cursor position
+    const selectionStart = e.target.selectionStart;
+    const selectionEnd = e.target.selectionEnd;
     
     // Only update state if not composing (for IME keyboards)
     if (!isComposingRef.current || e.type === 'compositionend') {
       setEditedContent(value);
     }
     
-    // 🎯 CRITICAL FIX: Preserve focus on PC
-    if (editorTextareaRef.current && !isComposingRef.current) {
-      requestAnimationFrame(() => {
-        if (editorTextareaRef.current) {
-          // Maintain focus
-          if (document.activeElement !== editorTextareaRef.current && isEditing) {
-            editorTextareaRef.current.focus();
-          }
-          
-          // Don't adjust height on Android - causes keyboard to close
-          if (!isAndroidRef.current) {
-            editorTextareaRef.current.style.height = 'auto';
-            editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
-          }
+    // 🎯 CRITICAL FIX: Use setTimeout to restore cursor position after React's render cycle
+    setTimeout(() => {
+      if (editorTextareaRef.current) {
+        // Restore focus and cursor position
+        if (document.activeElement !== editorTextareaRef.current && isEditing) {
+          editorTextareaRef.current.focus();
         }
-      });
-    }
+        editorTextareaRef.current.setSelectionRange(selectionStart, selectionEnd);
+        
+        // 🎯 FIX: Prevent height adjustments on mobile (causes reflows)
+        if (!isAndroidRef.current) {
+          editorTextareaRef.current.style.height = 'auto';
+          editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
+        }
+      }
+    }, 0);
   }, [isEditing]);
 
   const handleCompositionStart = useCallback((e) => {
     isComposingRef.current = true;
+    e.target.setAttribute('data-composition', 'true');
   }, []);
 
   const handleCompositionEnd = useCallback((e) => {
     isComposingRef.current = false;
+    e.target.setAttribute('data-composition', 'false');
     handleEditorChange(e);
   }, [handleEditorChange]);
 
   // 🎯 FIXED: Save handler with focus management
   const handleSave = useCallback(() => {
-    if (selectedFile) {
-      const updatedArtifacts = currentArtifacts.map(art => 
-        art.path === selectedFile.path ? { ...art, content: editedContent } : art
-      );
-      
-      setArtifacts(prev => ({ 
-        ...prev, 
-        [currentConversationId]: updatedArtifacts 
-      }));
-      
-      const updatedArtifactsObj = { 
-        ...artifacts, 
-        [currentConversationId]: updatedArtifacts 
-      };
-      
-      saveArtifacts(updatedArtifactsObj);
-      
-      setIsEditing(false);
-      setShowEmptyState(false);
-      
-      setSelectedFile(prev => prev ? { ...prev, content: editedContent } : null);
-      
-      // 🎯 FIX: Remove focus after save
-      if (editorTextareaRef.current) {
-        editorTextareaRef.current.blur();
-        editorTextareaRef.current.classList.remove('editing');
-      }
+    // 🎯 Dismiss keyboard before saving
+    if (editorTextareaRef.current && isAndroidRef.current) {
+      editorTextareaRef.current.blur();
     }
+    
+    // Short delay to ensure keyboard is dismissed
+    setTimeout(() => {
+      if (selectedFile) {
+        const updatedArtifacts = currentArtifacts.map(art => 
+          art.path === selectedFile.path ? { ...art, content: editedContent } : art
+        );
+        
+        setArtifacts(prev => ({ 
+          ...prev, 
+          [currentConversationId]: updatedArtifacts 
+        }));
+        
+        const updatedArtifactsObj = { 
+          ...artifacts, 
+          [currentConversationId]: updatedArtifacts 
+        };
+        
+        saveArtifacts(updatedArtifactsObj);
+        
+        setIsEditing(false);
+        setShowEmptyState(false);
+        
+        setSelectedFile(prev => prev ? { ...prev, content: editedContent } : null);
+      }
+    }, 100);
   }, [selectedFile, editedContent, currentArtifacts, currentConversationId, artifacts, saveArtifacts]);
 
   // 🎯 FIXED: Cancel edit handler with focus management
   const handleCancelEdit = useCallback(() => {
-    if (selectedFile) {
-      setEditedContent(selectedFile.content);
-      setIsEditing(false);
-      
-      // 🎯 FIX: Remove focus after cancel
-      if (editorTextareaRef.current) {
-        editorTextareaRef.current.blur();
-        editorTextareaRef.current.classList.remove('editing');
-      }
+    // 🎯 Dismiss keyboard before canceling
+    if (editorTextareaRef.current && isAndroidRef.current) {
+      editorTextareaRef.current.blur();
     }
+    
+    setTimeout(() => {
+      if (selectedFile) {
+        setEditedContent(selectedFile.content);
+        setIsEditing(false);
+      }
+    }, 100);
   }, [selectedFile]);
 
   const handleDelete = useCallback((filePath, e) => {
@@ -2980,12 +2999,6 @@ const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
                             // Move cursor to end
                             const length = editorTextareaRef.current.value.length;
                             editorTextareaRef.current.setSelectionRange(length, length);
-                            
-                            // 🎯 ADD: Trigger a reflow to ensure Android keyboard stays open
-                            if (isAndroidRef.current) {
-                              editorTextareaRef.current.blur();
-                              setTimeout(() => editorTextareaRef.current.focus(), 50);
-                            }
                           }
                         }, 50);
                       }} 
@@ -3009,23 +3022,6 @@ const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
                   >
                     <Trash2 size={14} />
                   </button>
-                  <button 
-                    onClick={() => {
-                      if (selectedFile) {
-                        const artifactToAdd = {
-                          ...selectedFile,
-                          id: generateSafeId(selectedFile.path),
-                          timestamp: new Date().toISOString()
-                        };
-                        handleArtifactUpdate([...currentArtifacts, artifactToAdd]);
-                      }
-                    }}
-                    className="icon-button small primary"
-                    aria-label="Add to project"
-                    title="Add to project"
-                  >
-                    <Plus size={14} />
-                  </button>
                 </div>
               </div>
               
@@ -3047,56 +3043,39 @@ const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
                     data-gramm="false"
                     data-gramm_editor="false"
                     data-enable-grammarly="false"
-                    // 🎯 CRITICAL FIX: Prevent focus loss on mobile
-                    onBlur={(e) => {
-                      // Only re-focus if we're editing and lost focus unexpectedly
-                      if (isEditing && isAndroidRef.current) {
-                        setTimeout(() => {
-                          // Check if blur was caused by something other than user action
-                          const activeElement = document.activeElement;
-                          const isStillInEditor = editorTextareaRef.current?.contains(activeElement);
-                          
-                          if (editorTextareaRef.current && 
-                              !isStillInEditor && 
-                              activeElement.tagName !== 'BUTTON') {
-                            editorTextareaRef.current.focus();
-                          }
-                        }, 100);
+                    // 🎯 CRITICAL FIXES FOR MOBILE
+                    enterKeyHint="enter"
+                    inputMode="text"
+                    // Prevent iOS zoom on focus
+                    fontSize="16px"
+                    // Android specific fixes
+                    onTouchStart={(e) => {
+                      if (isAndroidRef.current) {
+                        e.stopPropagation();
                       }
                     }}
-                    // Force Android to keep keyboard open
-                    inputMode="text"
-                    enterKeyHint="enter"
-                    // 🎯 NEW: Prevent default behaviors that cause focus loss
-                    onTouchStart={(e) => {
-                      if (isAndroidRef.current && isEditing) {
+                    onTouchEnd={(e) => {
+                      if (isAndroidRef.current) {
                         e.stopPropagation();
-                        // Ensure we have focus
-                        if (document.activeElement !== e.target) {
-                          e.target.focus();
+                      }
+                    }}
+                    // Prevent React from taking over focus management
+                    onBlur={(e) => {
+                      if (isAndroidRef.current && isEditing) {
+                        const activeElement = e.relatedTarget;
+                        const shouldBlur = activeElement && 
+                          (activeElement.tagName === 'BUTTON' || 
+                           activeElement.closest('.editor-actions') ||
+                           activeElement.closest('.mobile-back-btn'));
+                        
+                        if (!shouldBlur) {
+                          // Re-focus immediately
+                          setTimeout(() => e.target.focus(), 50);
                         }
                       }
                     }}
-                    onTouchMove={(e) => {
-                      // Allow touch scrolling but prevent default behaviors
-                      e.stopPropagation();
-                    }}
-                    onTouchEnd={(e) => {
-                      if (isAndroidRef.current && isEditing) {
-                        e.stopPropagation();
-                        // Prevent any parent handlers from stealing focus
-                        e.preventDefault();
-                      }
-                    }}
-                    // 🎯 FIX: Handle focus on edit button click
-                    onFocus={(e) => {
-                      if (isAndroidRef.current) {
-                        // Scroll into view when focused
-                        setTimeout(() => {
-                          e.target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                        }, 100);
-                      }
-                    }}
+                    // 🎯 KEY FIX: Use onInput instead of onChange for better mobile support
+                    onInput={handleEditorChange}
                   />
                 ) : (
                   <div className="code-preview">
