@@ -67,6 +67,11 @@
   --transition-slow: 0.35s ease;
 }
 
+input[type="text"],
+textarea {
+  font-size: 16px !important;
+}
+
 /* 🎯 DARK THEME */
 [data-theme="dark"] {
   --bg-primary: #1a1a1a;
@@ -1467,6 +1472,8 @@ pre {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .editor-header {
@@ -1548,6 +1555,9 @@ pre {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
+  background: var(--bg-secondary);
+  overflow: hidden;
 }
 
 .code-editor {
@@ -1556,18 +1566,33 @@ pre {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: var(--font-sm);
+  font-size: 16px !important; /* Critical: Prevents iOS zoom */
   line-height: 1.5;
   padding: var(--spacing-lg);
   resize: none;
   outline: none;
   white-space: pre;
   overflow: auto;
+  width: 100%;
+  /* Remove dynamic height on mobile */
+  height: 100%;
+  min-height: 400px;
+  -webkit-overflow-scrolling: touch;
+  /* Prevent iOS interference */
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
-.artifact-manager.mobile .code-editor {
-  font-size: var(--font-base);
-  padding: var(--spacing-md);
+.code-editor:focus {
+  outline: 2px solid var(--primary-color);
+  outline-offset: -2px;
+}
+
+.code-editor:disabled {
+  opacity: 0.6;
+  background: var(--bg-tertiary);
+  cursor: not-allowed;
 }
 
 .code-preview {
@@ -3844,5 +3869,95 @@ pre {
     max-width: none;
     border: 1px solid #ccc !important;
     break-inside: avoid;
+  }
+}
+
+/* iOS Safari specific - CRITICAL */
+@supports (-webkit-touch-callout: none) {
+  .code-editor {
+    /* Fixed height prevents keyboard closing */
+    height: calc(100vh - 300px) !important;
+    min-height: 500px !important;
+    max-height: none !important;
+    /* Prevent any layout shifts */
+    position: relative;
+    /* Ensure smooth scrolling */
+    -webkit-overflow-scrolling: touch;
+    overflow-y: scroll;
+  }
+
+   .editor-content {
+    /* Prevent flex from causing layout shifts */
+    height: 100%;
+    max-height: calc(100vh - 200px);
+  }
+
+    .artifact-manager.mobile .editor-content {
+    height: calc(100vh - 200px);
+    max-height: calc(100vh - 200px);
+  }
+
+    .editor-container {
+    height: calc(100vh - 200px);
+    max-height: calc(100vh - 200px);
+  }
+  
+  .artifact-manager.mobile .editor-container {
+    height: calc(100vh - 150px);
+  }
+
+    html {
+    height: 100%;
+  }
+  
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
+  
+  /* Fix for artifact manager on mobile */
+  .artifact-manager.mobile {
+    height: 100%;
+    max-height: 100vh;
+    overflow: hidden;
+  }
+  
+  .artifact-manager.mobile .file-editor-panel {
+    height: 100%;
+    overflow: hidden;
+  }
+  
+  /* Prevent any textarea from triggering layout recalculation */
+  textarea.code-editor {
+    /* Lock the height completely */
+    height: calc(100vh - 250px) !important;
+    /* Prevent any resize behavior */
+    resize: none !important;
+    /* Prevent scroll issues */
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  
+  /* Mobile specific locking */
+  .artifact-manager.mobile textarea.code-editor {
+    height: calc(100vh - 200px) !important;
+    position: relative;
+  }
+}
+
+/* Mobile specific */
+.artifact-manager.mobile .code-editor {
+  font-size: 16px !important; /* Must be 16px+ to prevent zoom */
+  padding: var(--spacing-md);
+  height: calc(100vh - 250px) !important;
+  min-height: 400px !important;
+}
+
+/* Desktop - allow flexible height */
+@media (min-width: 769px) {
+  .code-editor {
+    height: auto;
+    min-height: 300px;
+    max-height: 80vh;
   }
 }
