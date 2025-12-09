@@ -493,6 +493,9 @@ export default function App() {
 
   // 🎯 FIX: Add ref to track current artifacts for use in sendMessage
   const currentArtifactsRef = useRef([]);
+  
+  // 🎯 ANDROID DETECTION
+  const isAndroidRef = useRef(/android/i.test(navigator.userAgent));
 
   // 🎯 DERIVED STATE
   const currentArtifacts = useMemo(() => {
@@ -1167,6 +1170,53 @@ export default function App() {
     return contextParts.join('\n');
   }, []);
 
+  // 🎯 ANDROID KEYBOARD HANDLING
+  useEffect(() => {
+    // Detect Android and add class to HTML element
+    if (isAndroidRef.current) {
+      document.documentElement.classList.add('android');
+    }
+    
+    // Detect keyboard open/close for Android
+    const handleResize = () => {
+      if (isAndroidRef.current) {
+        const originalHeight = window.innerHeight;
+        const visualViewportHeight = window.visualViewport?.height || originalHeight;
+        const keyboardVisible = visualViewportHeight < originalHeight * 0.8;
+        
+        if (keyboardVisible) {
+          document.body.classList.add('keyboard-open');
+          document.body.classList.add('android-keyboard-open');
+          
+          // Scroll active textarea into view
+          const activeElement = document.activeElement;
+          if (activeElement && (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT')) {
+            setTimeout(() => {
+              activeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 100);
+          }
+        } else {
+          document.body.classList.remove('keyboard-open');
+          document.body.classList.remove('android-keyboard-open');
+        }
+      }
+    };
+    
+    if (isAndroidRef.current) {
+      window.addEventListener('resize', handleResize);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', handleResize);
+      }
+      
+      return () => {
+        window.removeEventListener('resize', handleResize);
+        if (window.visualViewport) {
+          window.visualViewport.removeEventListener('resize', handleResize);
+        }
+      };
+    }
+  }, []);
+
   // 🎯 USE EFFECTS
   useEffect(() => {
     const checkMobile = () => {
@@ -1331,7 +1381,7 @@ export default function App() {
     }
   }, [messages.length]);
 
-  // 🎯 IOS KEYBOARD FIX: Prevent focus loss on re-renders
+  // 🎯 IOS & ANDROID KEYBOARD FIX: Prevent focus loss on re-renders
   useEffect(() => {
     // Store the current active element before any state change
     const activeElement = document.activeElement;
@@ -1574,7 +1624,7 @@ export default function App() {
     input.click();
   }, [saveArtifacts]);
 
-  // 🎯 FIXED: iOS Keyboard Compatible Input Change Handler
+  // 🎯 FIXED: iOS & Android Compatible Input Change Handler
   const handleInputChange = useCallback((e) => {
     const value = e.target.value;
     
@@ -1588,17 +1638,19 @@ export default function App() {
       
       const ta = textareaRef.current;
       if (ta) { 
-        // 🎯 CRITICAL: Use setTimeout with 0 for iOS compatibility
-        setTimeout(() => {
-          ta.style.height = "auto"; 
-          const newHeight = Math.min(ta.scrollHeight, 200);
-          ta.style.height = `${newHeight}px`;
+        // 🎯 CRITICAL: Use requestAnimationFrame for Android compatibility
+        requestAnimationFrame(() => {
+          if (!isAndroidRef.current) {
+            ta.style.height = "auto"; 
+            const newHeight = Math.min(ta.scrollHeight, 200);
+            ta.style.height = `${newHeight}px`;
+          }
           
-          // 🎯 Ensure focus is maintained on iOS
+          // 🎯 Ensure focus is maintained on mobile
           if (document.activeElement !== ta) {
             ta.focus();
           }
-        }, 0);
+        });
       }
     }
   }, [input]);
@@ -1784,7 +1836,14 @@ if __name__ == "__main__":
     // Focus on the editor
     setTimeout(() => {
       const editor = document.querySelector('.code-editor');
-      if (editor) editor.focus();
+      if (editor) {
+        editor.focus();
+        // Move cursor to end for Android
+        if (isAndroidRef.current) {
+          const length = editor.value.length;
+          editor.setSelectionRange(length, length);
+        }
+      }
     }, 100);
   }, [currentConversationId, currentArtifacts, artifacts, saveArtifacts, isMobile]);
 
@@ -1970,7 +2029,9 @@ if __name__ == "__main__":
     setInput("");
     setOllamaError(null);
     setIsLoading(true);
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
+    if (textareaRef.current && !isAndroidRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -2467,6 +2528,609 @@ if __name__ == "__main__":
       </div>
     );
   }, [handleArtifactUpdate, currentArtifacts, handleViewEdit]);
+
+// 🎯 ANDROID OPTIMIZED ARTIFACT MANAGER COMPONENT
+const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
+  const debouncedSearchTerm = useDebounce(searchTerm, APP_CONFIG.TIMEOUTS.DEBOUNCE_DELAY);
+  const editorTextareaRef = useRef(null);
+  const isComposingRef = useRef(false);
+
+  // 🎯 ANDROID KEYBOARD FIX: Focus management
+  useEffect(() => {
+    if (isAndroidRef.current && selectedFile && isEditing) {
+      // Focus on the editor when editing starts
+      const timer = setTimeout(() => {
+        if (editorTextareaRef.current) {
+          editorTextareaRef.current.focus();
+          // Move cursor to end
+          const length = editorTextareaRef.current.value.length;
+          editorTextareaRef.current.setSelectionRange(length, length);
+        }
+      }, 100);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [selectedFile, isEditing]);
+
+  // Add this useEffect to handle focus state
+  useEffect(() => {
+    if (isEditing && selectedFile) {
+      const timer = setTimeout(() => {
+        if (editorTextareaRef.current) {
+          // Ensure we have focus
+          if (document.activeElement !== editorTextareaRef.current) {
+            editorTextareaRef.current.focus();
+          }
+          
+          // Add editing class for visual feedback
+          editorTextareaRef.current.classList.add('editing');
+          
+          // 🎯 FIX: For Android, ensure keyboard stays open
+          if (isAndroidRef.current) {
+            // Force a re-focus to keep keyboard open
+            setTimeout(() => {
+              if (editorTextareaRef.current && isEditing) {
+                editorTextareaRef.current.blur();
+                editorTextareaRef.current.focus();
+              }
+            }, 200);
+          }
+        }
+      }, 100);
+      
+      return () => {
+        clearTimeout(timer);
+        if (editorTextareaRef.current) {
+          editorTextareaRef.current.classList.remove('editing');
+        }
+      };
+    }
+  }, [isEditing, selectedFile]);
+
+  const toggleFolder = useCallback((folderPath, e) => {
+    if (e) e.stopPropagation();
+    setExpandedFolders(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(folderPath)) newSet.delete(folderPath);
+      else newSet.add(folderPath);
+      return newSet;
+    });
+  }, []);
+
+  const handleFileSelect = useCallback((file, e) => {
+    if (e) e.stopPropagation();
+    setSelectedFile(file);
+    setEditedContent(file.content);
+    setIsEditing(false);
+    setViewMode('editor');
+    if (isMobile) setMobilePanel('editor');
+    setShowEmptyState(false);
+  }, [isMobile]);
+
+  // 🎯 FIXED: Optimized editor change handler with focus preservation
+  const handleEditorChange = useCallback((e) => {
+    const value = e.target.value;
+    
+    // Check if we're in composition mode (IME input)
+    if (e.type === 'compositionstart') {
+      isComposingRef.current = true;
+    }
+    if (e.type === 'compositionend') {
+      isComposingRef.current = false;
+    }
+    
+    // Only update state if not composing (for IME keyboards)
+    if (!isComposingRef.current || e.type === 'compositionend') {
+      setEditedContent(value);
+    }
+    
+    // 🎯 CRITICAL FIX: Preserve focus on PC
+    if (editorTextareaRef.current && !isComposingRef.current) {
+      requestAnimationFrame(() => {
+        if (editorTextareaRef.current) {
+          // Maintain focus
+          if (document.activeElement !== editorTextareaRef.current && isEditing) {
+            editorTextareaRef.current.focus();
+          }
+          
+          // Don't adjust height on Android - causes keyboard to close
+          if (!isAndroidRef.current) {
+            editorTextareaRef.current.style.height = 'auto';
+            editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
+          }
+        }
+      });
+    }
+  }, [isEditing]);
+
+  const handleCompositionStart = useCallback((e) => {
+    isComposingRef.current = true;
+  }, []);
+
+  const handleCompositionEnd = useCallback((e) => {
+    isComposingRef.current = false;
+    handleEditorChange(e);
+  }, [handleEditorChange]);
+
+  // 🎯 FIXED: Save handler with focus management
+  const handleSave = useCallback(() => {
+    if (selectedFile) {
+      const updatedArtifacts = currentArtifacts.map(art => 
+        art.path === selectedFile.path ? { ...art, content: editedContent } : art
+      );
+      
+      setArtifacts(prev => ({ 
+        ...prev, 
+        [currentConversationId]: updatedArtifacts 
+      }));
+      
+      const updatedArtifactsObj = { 
+        ...artifacts, 
+        [currentConversationId]: updatedArtifacts 
+      };
+      
+      saveArtifacts(updatedArtifactsObj);
+      
+      setIsEditing(false);
+      setShowEmptyState(false);
+      
+      setSelectedFile(prev => prev ? { ...prev, content: editedContent } : null);
+      
+      // 🎯 FIX: Remove focus after save
+      if (editorTextareaRef.current) {
+        editorTextareaRef.current.blur();
+        editorTextareaRef.current.classList.remove('editing');
+      }
+    }
+  }, [selectedFile, editedContent, currentArtifacts, currentConversationId, artifacts, saveArtifacts]);
+
+  // 🎯 FIXED: Cancel edit handler with focus management
+  const handleCancelEdit = useCallback(() => {
+    if (selectedFile) {
+      setEditedContent(selectedFile.content);
+      setIsEditing(false);
+      
+      // 🎯 FIX: Remove focus after cancel
+      if (editorTextareaRef.current) {
+        editorTextareaRef.current.blur();
+        editorTextareaRef.current.classList.remove('editing');
+      }
+    }
+  }, [selectedFile]);
+
+  const handleDelete = useCallback((filePath, e) => {
+    if (e) e.stopPropagation();
+    if (!confirm(`Are you sure you want to delete "${filePath}"?\n\nThis will remove the file from your project and cannot be undone.`)) return;
+    
+    const updatedArtifacts = currentArtifacts.filter(art => art.path !== filePath);
+    
+    setArtifacts(prev => ({ 
+      ...prev, 
+      [currentConversationId]: updatedArtifacts 
+    }));
+    
+    const updatedArtifactsObj = { 
+      ...artifacts, 
+      [currentConversationId]: updatedArtifacts 
+    };
+    
+    saveArtifacts(updatedArtifactsObj);
+    
+    if (selectedFile?.path === filePath) {
+      setSelectedFile(null);
+      setEditedContent('');
+      if (isMobile) setMobilePanel('tree');
+    }
+    
+    if (updatedArtifacts.length === 0) {
+      setShowEmptyState(true);
+    }
+  }, [currentArtifacts, selectedFile, currentConversationId, artifacts, saveArtifacts, isMobile]);
+
+  const fileTree = useMemo(() => {
+    const tree = {};
+    
+    const limitedArtifacts = currentArtifacts.slice(0, 100);
+    
+    limitedArtifacts.forEach(file => {
+      const pathParts = file.path.split('/');
+      let currentLevel = tree;
+      
+      pathParts.forEach((part, index) => {
+        const isFile = index === pathParts.length - 1;
+        
+        if (!currentLevel[part]) {
+          if (isFile) {
+            currentLevel[part] = { 
+              ...file, 
+              type: 'file', 
+              name: part, 
+              fullPath: file.path 
+            };
+          } else {
+            currentLevel[part] = { 
+              type: 'folder', 
+              name: part, 
+              children: {}, 
+              fullPath: pathParts.slice(0, index + 1).join('/') 
+            };
+          }
+        }
+        
+        if (!isFile) {
+          currentLevel = currentLevel[part].children;
+        }
+      });
+    });
+    
+    return tree;
+  }, [currentArtifacts]);
+
+  const filteredFileTree = useMemo(() => {
+    if (!debouncedSearchTerm) return fileTree;
+
+    const filterTree = (node) => {
+      const filtered = {};
+      for (const key in node) {
+        const item = node[key];
+        const matchesSearch = item.name.toLowerCase().includes(debouncedSearchTerm.toLowerCase());
+        
+        if (item.type === 'file' && matchesSearch) {
+          filtered[key] = item;
+        } else if (item.type === 'folder') {
+          const filteredChildren = filterTree(item.children);
+          if (Object.keys(filteredChildren).length > 0 || matchesSearch) {
+            filtered[key] = { ...item, children: filteredChildren };
+          }
+        }
+      }
+      return filtered;
+    };
+    return filterTree(fileTree);
+  }, [fileTree, debouncedSearchTerm]);
+
+  const FileTreeComponent = useCallback(({ node, depth = 0 }) => {
+    const items = Object.keys(node).sort((a, b) => {
+      const aIsFolder = node[a].type === 'folder';
+      const bIsFolder = node[b].type === 'folder';
+      if (aIsFolder && !bIsFolder) return -1;
+      if (!aIsFolder && bIsFolder) return 1;
+      return a.localeCompare(b);
+    }).slice(0, 50);
+
+    return items.map((key) => {
+      const item = node[key];
+      if (!item) return null;
+      
+      const isExpanded = expandedFolders.has(item.fullPath);
+      const isSelected = selectedFile?.path === item.fullPath;
+
+      if (item.type === 'file') {
+        return (
+          <div
+            key={`file-${item.fullPath}-${item.id}`}
+            className={`file-tree-item file ${isSelected ? 'selected' : ''}`}
+            style={{ paddingLeft: `${depth * 16 + 8}px` }}
+            onClick={(e) => handleFileSelect(item, e)}
+            role="button"
+            tabIndex={0}
+          >
+            <div className="file-icon"><FileCode size={14} /></div>
+            <span className="file-name">{item.name}</span>
+            <span className="file-language-badge">{item.language}</span>
+          </div>
+        );
+      } else {
+        return (
+          <div key={`folder-${item.fullPath}`} className="folder-container">
+            <div
+              className={`file-tree-item folder ${isExpanded ? 'expanded' : ''}`}
+              style={{ paddingLeft: `${depth * 16}px` }}
+              onClick={(e) => toggleFolder(item.fullPath, e)}
+              role="button"
+              tabIndex={0}
+            >
+              <div className="folder-icon">
+                {isExpanded ? <FolderOpen size={14} /> : <Folder size={14} />}
+                <ChevronRight size={12} className={`folder-chevron ${isExpanded ? 'expanded' : ''}`} />
+              </div>
+              <span className="folder-name">{item.name}</span>
+              <span className="folder-count">{Object.keys(item.children).length}</span>
+            </div>
+            {isExpanded && (
+              <div className="folder-children">
+                <FileTreeComponent node={item.children} depth={depth + 1} />
+              </div>
+            )}
+          </div>
+        );
+      }
+    });
+  }, [expandedFolders, selectedFile, handleFileSelect, toggleFolder]);
+
+  return (
+    <div className={`artifact-manager ${isMobile ? 'mobile' : ''} ${isAndroidRef.current ? 'android' : ''}`}>
+      {(!isMobile || mobilePanel === 'tree') && (
+        <div className="file-tree-panel">
+          <div className="panel-header">
+            <div className="panel-title">
+              <SquareStack size={16} />
+              <span>Project Files</span>
+              <span className="file-count">({currentArtifacts.length})</span>
+            </div>
+            <div className="panel-actions-wrapper" ref={createMenuRef}>
+              <button 
+                onClick={() => {
+                  setShowCreateMenu(prev => !prev);
+                }} 
+                className="icon-button small primary" 
+                title="Create new"
+                aria-label="Create new file or folder"
+              >
+                <Plus size={14} />
+              </button>
+              {showCreateMenu && (
+                <CreateMenu onClose={() => setShowCreateMenu(false)} />
+              )}
+            </div>
+          </div>
+          
+          {creatingFolder && (
+            <div className="creating-folder-container">
+              <FolderCreationInput />
+            </div>
+          )}
+          
+          <div className="search-box">
+            <Search size={14} />
+            <input
+              type="text"
+              placeholder="Search files..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="search-input"
+              aria-label="Search files"
+            />
+            {searchTerm && (
+              <button 
+                onClick={() => setSearchTerm('')} 
+                className="search-clear"
+                aria-label="Clear search"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+          
+          <div className="file-tree-container">
+            {currentArtifacts.length === 0 || Object.keys(filteredFileTree).length === 0 ? (
+              showEmptyState && <EmptyArtifactsPlaceholder />
+            ) : (
+              <div className="file-tree-content">
+                <FileTreeComponent node={filteredFileTree} />
+              </div>
+            )}
+          </div>
+
+          {isMobile && selectedFile && (
+            <button 
+              className="mobile-view-file-btn"
+              onClick={() => setMobilePanel('editor')}
+              aria-label={`View ${selectedFile.name}`}
+            >
+              <FileCode size={16} />
+              View {selectedFile.name}
+            </button>
+          )}
+        </div>
+      )}
+      
+      {(!isMobile || mobilePanel === 'editor') && (
+        <div className="file-editor-panel">
+          {isMobile && (
+            <div className="mobile-editor-header">
+              <button 
+                onClick={() => setMobilePanel('tree')}
+                className="mobile-back-btn"
+                aria-label="Back to files"
+              >
+                <ChevronLeft size={16} />
+                Back to Files
+              </button>
+              <span className="mobile-file-count">{currentArtifacts.length} files</span>
+            </div>
+          )}
+          
+          {selectedFile ? (
+            <div className="editor-container">
+              <div className="editor-header">
+                <div className="file-info">
+                  <FileCode size={16} />
+                  <div className="file-details">
+                    <span className="file-path">{selectedFile.path}</span>
+                    <span className="file-language">{selectedFile.language}</span>
+                  </div>
+                </div>
+                
+                <div className="editor-actions">
+                  <button 
+                    onClick={() => setViewMode(prev => prev === 'editor' ? 'preview' : 'editor')} 
+                    className="icon-button small"
+                    aria-label={viewMode === 'editor' ? 'Switch to preview mode' : 'Switch to edit mode'}
+                  >
+                    {viewMode === 'editor' ? <Eye size={14} /> : <EyeOff size={14} />}
+                  </button>
+                  {isEditing ? (
+                    <>
+                      <button onClick={handleSave} className="icon-button small success" aria-label="Save changes">
+                        <Check size={14} />
+                      </button>
+                      <button onClick={handleCancelEdit} className="icon-button small" aria-label="Cancel edit">
+                        <X size={14} />
+                      </button>
+                    </>
+                  ) : (
+                    <button 
+                      onClick={() => {
+                        setIsEditing(true);
+                        // 🎯 CRITICAL: Delay focus to ensure editing state is set
+                        setTimeout(() => {
+                          if (editorTextareaRef.current) {
+                            editorTextareaRef.current.focus();
+                            // Move cursor to end
+                            const length = editorTextareaRef.current.value.length;
+                            editorTextareaRef.current.setSelectionRange(length, length);
+                            
+                            // 🎯 ADD: Trigger a reflow to ensure Android keyboard stays open
+                            if (isAndroidRef.current) {
+                              editorTextareaRef.current.blur();
+                              setTimeout(() => editorTextareaRef.current.focus(), 50);
+                            }
+                          }
+                        }, 50);
+                      }} 
+                      className="icon-button small" 
+                      aria-label="Edit file"
+                    >
+                      <Edit size={14} />
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => navigator.clipboard.writeText(selectedFile.content)} 
+                    className="icon-button small"
+                    aria-label="Copy file content"
+                  >
+                    <Copy size={14} />
+                  </button>
+                  <button 
+                    onClick={(e) => handleDelete(selectedFile.path, e)} 
+                    className="icon-button small danger"
+                    aria-label="Delete file"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                  <button 
+                    onClick={() => {
+                      if (selectedFile) {
+                        const artifactToAdd = {
+                          ...selectedFile,
+                          id: generateSafeId(selectedFile.path),
+                          timestamp: new Date().toISOString()
+                        };
+                        handleArtifactUpdate([...currentArtifacts, artifactToAdd]);
+                      }
+                    }}
+                    className="icon-button small primary"
+                    aria-label="Add to project"
+                    title="Add to project"
+                  >
+                    <Plus size={14} />
+                  </button>
+                </div>
+              </div>
+              
+              <div className="editor-content">
+                {viewMode === 'editor' ? (
+                  <textarea
+                    ref={editorTextareaRef}
+                    value={editedContent}
+                    onChange={handleEditorChange}
+                    onCompositionStart={handleCompositionStart}
+                    onCompositionEnd={handleCompositionEnd}
+                    className={`code-editor ${isAndroidRef.current ? 'android' : ''}`}
+                    spellCheck="false"
+                    disabled={!isEditing}
+                    aria-label="Code editor"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    data-gramm="false"
+                    data-gramm_editor="false"
+                    data-enable-grammarly="false"
+                    // 🎯 CRITICAL FIX: Prevent focus loss on mobile
+                    onBlur={(e) => {
+                      // Only re-focus if we're editing and lost focus unexpectedly
+                      if (isEditing && isAndroidRef.current) {
+                        setTimeout(() => {
+                          // Check if blur was caused by something other than user action
+                          const activeElement = document.activeElement;
+                          const isStillInEditor = editorTextareaRef.current?.contains(activeElement);
+                          
+                          if (editorTextareaRef.current && 
+                              !isStillInEditor && 
+                              activeElement.tagName !== 'BUTTON') {
+                            editorTextareaRef.current.focus();
+                          }
+                        }, 100);
+                      }
+                    }}
+                    // Force Android to keep keyboard open
+                    inputMode="text"
+                    enterKeyHint="enter"
+                    // 🎯 NEW: Prevent default behaviors that cause focus loss
+                    onTouchStart={(e) => {
+                      if (isAndroidRef.current && isEditing) {
+                        e.stopPropagation();
+                        // Ensure we have focus
+                        if (document.activeElement !== e.target) {
+                          e.target.focus();
+                        }
+                      }
+                    }}
+                    onTouchMove={(e) => {
+                      // Allow touch scrolling but prevent default behaviors
+                      e.stopPropagation();
+                    }}
+                    onTouchEnd={(e) => {
+                      if (isAndroidRef.current && isEditing) {
+                        e.stopPropagation();
+                        // Prevent any parent handlers from stealing focus
+                        e.preventDefault();
+                      }
+                    }}
+                    // 🎯 FIX: Handle focus on edit button click
+                    onFocus={(e) => {
+                      if (isAndroidRef.current) {
+                        // Scroll into view when focused
+                        setTimeout(() => {
+                          e.target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }, 100);
+                      }
+                    }}
+                  />
+                ) : (
+                  <div className="code-preview">
+                    <SyntaxHighlighter 
+                      language={selectedFile.language} 
+                      style={oneDark} 
+                      showLineNumbers={true} 
+                      wrapLongLines={false}
+                    >
+                      {selectedFile.content}
+                    </SyntaxHighlighter>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="no-file-selected">
+              <FileCode size={48} />
+              <h3>No file selected</h3>
+              <p>Select a file from the sidebar to view or edit its contents</p>
+              <button 
+                onClick={() => handleCreateNewFile()} 
+                className="create-file-button"
+                aria-label="Create new file"
+              >
+                <FilePlus size={16} />Create New File
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
 
   // 🎯 EMPTY ARTIFACTS PLACEHOLDER COMPONENT
   const EmptyArtifactsPlaceholder = React.memo(() => {
@@ -3674,440 +4338,6 @@ if __name__ == "__main__":
     );
   });
 
-  const ArtifactManager = React.memo(({ isMobile, currentConversationId }) => {
-    const debouncedSearchTerm = useDebounce(searchTerm, APP_CONFIG.TIMEOUTS.DEBOUNCE_DELAY);
-    const editorRef = useRef(null); // NEW: Dedicated ref for editor
-
-    // REMOVED: const artifactKey = useMemo(...)
-
-    const toggleFolder = useCallback((folderPath, e) => {
-      if (e) e.stopPropagation();
-      setExpandedFolders(prev => {
-        const newSet = new Set(prev);
-        if (newSet.has(folderPath)) newSet.delete(folderPath);
-        else newSet.add(folderPath);
-        return newSet;
-      });
-    }, []);
-
-    const handleFileSelect = useCallback((file, e) => {
-      if (e) e.stopPropagation();
-      setSelectedFile(file);
-      setEditedContent(file.content);
-      setIsEditing(false);
-      setViewMode('editor');
-      if (isMobile) setMobilePanel('editor');
-      setShowEmptyState(false);
-    }, [isMobile]);
-
-    // FIXED: Optimized save handler
-    const handleSave = useCallback(() => {
-      if (selectedFile) {
-        const updatedArtifacts = currentArtifacts.map(art => 
-          art.path === selectedFile.path ? { ...art, content: editedContent } : art
-        );
-        
-        setArtifacts(prev => ({ 
-          ...prev, 
-          [currentConversationId]: updatedArtifacts 
-        }));
-        
-        const updatedArtifactsObj = { 
-          ...artifacts, 
-          [currentConversationId]: updatedArtifacts 
-        };
-        
-        saveArtifacts(updatedArtifactsObj);
-        
-        setIsEditing(false);
-        setShowEmptyState(false);
-        
-        setSelectedFile(prev => prev ? { ...prev, content: editedContent } : null);
-      }
-    }, [selectedFile, editedContent, currentArtifacts, currentConversationId, artifacts, saveArtifacts]);
-
-    // FIXED: iOS-optimized editor change handler
-    const handleEditorChange = useCallback((e) => {
-      const value = e.target.value;
-      setEditedContent(value);
-      
-      // Only adjust height on desktop to prevent iOS keyboard issues
-      if (!isMobile && editorRef.current) {
-        requestAnimationFrame(() => {
-          if (editorRef.current) {
-            editorRef.current.style.height = 'auto';
-            editorRef.current.style.height = `${editorRef.current.scrollHeight}px`;
-          }
-        });
-      }
-    }, [isMobile]);
-
-    const handleCancelEdit = useCallback(() => {
-      if (selectedFile) setEditedContent(selectedFile.content);
-      setIsEditing(false);
-    }, [selectedFile]);
-
-    const handleDelete = useCallback((filePath, e) => {
-      if (e) e.stopPropagation();
-      if (!confirm(`Are you sure you want to delete "${filePath}"?\n\nThis will remove the file from your project and cannot be undone.`)) return;
-      
-      const updatedArtifacts = currentArtifacts.filter(art => art.path !== filePath);
-      
-      setArtifacts(prev => ({ 
-        ...prev, 
-        [currentConversationId]: updatedArtifacts 
-      }));
-      
-      const updatedArtifactsObj = { 
-        ...artifacts, 
-        [currentConversationId]: updatedArtifacts 
-      };
-      
-      saveArtifacts(updatedArtifactsObj);
-      
-      if (selectedFile?.path === filePath) {
-        setSelectedFile(null);
-        setEditedContent('');
-        if (isMobile) setMobilePanel('tree');
-      }
-      
-      if (updatedArtifacts.length === 0) {
-        setShowEmptyState(true);
-      }
-    }, [currentArtifacts, selectedFile, currentConversationId, artifacts, saveArtifacts, isMobile]);
-
-    const fileTree = useMemo(() => {
-      const tree = {};
-      
-      const limitedArtifacts = currentArtifacts.slice(0, 100);
-      
-      limitedArtifacts.forEach(file => {
-        const pathParts = file.path.split('/');
-        let currentLevel = tree;
-        
-        pathParts.forEach((part, index) => {
-          const isFile = index === pathParts.length - 1;
-          
-          if (!currentLevel[part]) {
-            if (isFile) {
-              currentLevel[part] = { 
-                ...file, 
-                type: 'file', 
-                name: part, 
-                fullPath: file.path 
-              };
-            } else {
-              currentLevel[part] = { 
-                type: 'folder', 
-                name: part, 
-                children: {}, 
-                fullPath: pathParts.slice(0, index + 1).join('/') 
-              };
-            }
-          }
-          
-          if (!isFile) {
-            currentLevel = currentLevel[part].children;
-          }
-        });
-      });
-      
-      return tree;
-    }, [currentArtifacts]);
-
-    const filteredFileTree = useMemo(() => {
-      if (!debouncedSearchTerm) return fileTree;
-
-      const filterTree = (node) => {
-        const filtered = {};
-        for (const key in node) {
-          const item = node[key];
-          const matchesSearch = item.name.toLowerCase().includes(debouncedSearchTerm.toLowerCase());
-          
-          if (item.type === 'file' && matchesSearch) {
-            filtered[key] = item;
-          } else if (item.type === 'folder') {
-            const filteredChildren = filterTree(item.children);
-            if (Object.keys(filteredChildren).length > 0 || matchesSearch) {
-              filtered[key] = { ...item, children: filteredChildren };
-            }
-          }
-        }
-        return filtered;
-      };
-      return filterTree(fileTree);
-    }, [fileTree, debouncedSearchTerm]);
-
-    const FileTreeComponent = useCallback(({ node, depth = 0 }) => {
-      const items = Object.keys(node).sort((a, b) => {
-        const aIsFolder = node[a].type === 'folder';
-        const bIsFolder = node[b].type === 'folder';
-        if (aIsFolder && !bIsFolder) return -1;
-        if (!aIsFolder && bIsFolder) return 1;
-        return a.localeCompare(b);
-      }).slice(0, 50);
-
-      return items.map((key) => {
-        const item = node[key];
-        if (!item) return null;
-        
-        const isExpanded = expandedFolders.has(item.fullPath);
-        const isSelected = selectedFile?.path === item.fullPath;
-
-        if (item.type === 'file') {
-          return (
-            <div
-              key={`file-${item.fullPath}-${item.id}`}
-              className={`file-tree-item file ${isSelected ? 'selected' : ''}`}
-              style={{ paddingLeft: `${depth * 16 + 8}px` }}
-              onClick={(e) => handleFileSelect(item, e)}
-              role="button"
-              tabIndex={0}
-            >
-              <div className="file-icon"><FileCode size={14} /></div>
-              <span className="file-name">{item.name}</span>
-              <span className="file-language-badge">{item.language}</span>
-            </div>
-          );
-        } else {
-          return (
-            <div key={`folder-${item.fullPath}`} className="folder-container">
-              <div
-                className={`file-tree-item folder ${isExpanded ? 'expanded' : ''}`}
-                style={{ paddingLeft: `${depth * 16}px` }}
-                onClick={(e) => toggleFolder(item.fullPath, e)}
-                role="button"
-                tabIndex={0}
-              >
-                <div className="folder-icon">
-                  {isExpanded ? <FolderOpen size={14} /> : <Folder size={14} />}
-                  <ChevronRight size={12} className={`folder-chevron ${isExpanded ? 'expanded' : ''}`} />
-                </div>
-                <span className="folder-name">{item.name}</span>
-                <span className="folder-count">{Object.keys(item.children).length}</span>
-              </div>
-              {isExpanded && (
-                <div className="folder-children">
-                  <FileTreeComponent node={item.children} depth={depth + 1} />
-                </div>
-              )}
-            </div>
-          );
-        }
-      });
-    }, [expandedFolders, selectedFile, handleFileSelect, toggleFolder]);
-
-    return (
-      <div className={`artifact-manager ${isMobile ? 'mobile' : ''}`}>
-        {(!isMobile || mobilePanel === 'tree') && (
-          <div className="file-tree-panel">
-            <div className="panel-header">
-              <div className="panel-title">
-                <SquareStack size={16} />
-                <span>Project Files</span>
-                <span className="file-count">({currentArtifacts.length})</span>
-              </div>
-              <div className="panel-actions-wrapper" ref={createMenuRef}>
-                <button 
-                  onClick={() => {
-                    setShowCreateMenu(prev => !prev);
-                  }} 
-                  className="icon-button small primary" 
-                  title="Create new"
-                  aria-label="Create new file or folder"
-                >
-                  <Plus size={14} />
-                </button>
-                {showCreateMenu && (
-                  <CreateMenu onClose={() => setShowCreateMenu(false)} />
-                )}
-              </div>
-            </div>
-            
-            {creatingFolder && (
-              <div className="creating-folder-container">
-                <FolderCreationInput />
-              </div>
-            )}
-            
-            <div className="search-box">
-              <Search size={14} />
-              <input
-                type="text"
-                placeholder="Search files..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="search-input"
-                aria-label="Search files"
-              />
-              {searchTerm && (
-                <button 
-                  onClick={() => setSearchTerm('')} 
-                  className="search-clear"
-                  aria-label="Clear search"
-                >
-                  <X size={14} />
-                </button>
-              )}
-            </div>
-            
-            <div className="file-tree-container">
-              {currentArtifacts.length === 0 || Object.keys(filteredFileTree).length === 0 ? (
-                showEmptyState && <EmptyArtifactsPlaceholder />
-              ) : (
-                <div className="file-tree-content">
-                  <FileTreeComponent node={filteredFileTree} />
-                </div>
-              )}
-            </div>
-
-            {isMobile && selectedFile && (
-              <button 
-                className="mobile-view-file-btn"
-                onClick={() => setMobilePanel('editor')}
-                aria-label={`View ${selectedFile.name}`}
-              >
-                <FileCode size={16} />
-                View {selectedFile.name}
-              </button>
-            )}
-          </div>
-        )}
-        
-        {(!isMobile || mobilePanel === 'editor') && (
-          <div className="file-editor-panel">
-            {isMobile && (
-              <div className="mobile-editor-header">
-                <button 
-                  onClick={() => setMobilePanel('tree')}
-                  className="mobile-back-btn"
-                  aria-label="Back to files"
-                >
-                  <ChevronLeft size={16} />
-                  Back to Files
-                </button>
-                <span className="mobile-file-count">{currentArtifacts.length} files</span>
-              </div>
-            )}
-            
-            {selectedFile ? (
-              <div className="editor-container">
-                <div className="editor-header">
-                  <div className="file-info">
-                    <FileCode size={16} />
-                    <div className="file-details">
-                      <span className="file-path">{selectedFile.path}</span>
-                      <span className="file-language">{selectedFile.language}</span>
-                    </div>
-                  </div>
-                  
-                  <div className="editor-actions">
-                    <button 
-                      onClick={() => setViewMode(prev => prev === 'editor' ? 'preview' : 'editor')} 
-                      className="icon-button small"
-                      aria-label={viewMode === 'editor' ? 'Switch to preview mode' : 'Switch to edit mode'}
-                    >
-                      {viewMode === 'editor' ? <Eye size={14} /> : <EyeOff size={14} />}
-                    </button>
-                    {isEditing ? (
-                      <>
-                        <button onClick={handleSave} className="icon-button small success" aria-label="Save changes">
-                          <Check size={14} />
-                        </button>
-                        <button onClick={handleCancelEdit} className="icon-button small" aria-label="Cancel edit">
-                          <X size={14} />
-                        </button>
-                      </>
-                    ) : (
-                      <button onClick={() => setIsEditing(true)} className="icon-button small" aria-label="Edit file">
-                        <Edit size={14} />
-                      </button>
-                    )}
-                    <button 
-                      onClick={() => navigator.clipboard.writeText(selectedFile.content)} 
-                      className="icon-button small"
-                      aria-label="Copy file content"
-                    >
-                      <Copy size={14} />
-                    </button>
-                    <button 
-                      onClick={(e) => handleDelete(selectedFile.path, e)} 
-                      className="icon-button small danger"
-                      aria-label="Delete file"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                    <button 
-                      onClick={() => {
-                        if (selectedFile) {
-                          const artifactToAdd = {
-                            ...selectedFile,
-                            id: generateSafeId(selectedFile.path),
-                            timestamp: new Date().toISOString()
-                          };
-                          handleArtifactUpdate([...currentArtifacts, artifactToAdd]);
-                        }
-                      }}
-                      className="icon-button small primary"
-                      aria-label="Add to project"
-                      title="Add to project"
-                    >
-                      <Plus size={14} />
-                    </button>
-                  </div>
-                </div>
-                
-                <div className="editor-content">
-                  {viewMode === 'editor' ? (
-                    <textarea
-                      ref={editorRef}
-                      value={editedContent}
-                      onChange={handleEditorChange}
-                      className="code-editor"
-                      spellCheck="false"
-                      disabled={!isEditing}
-                      aria-label="Code editor"
-                      autoComplete="off"
-                      autoCorrect="off"
-                      autoCapitalize="off"
-                      data-gramm="false"
-                      data-gramm_editor="false"
-                      data-enable-grammarly="false"
-                    />
-                  ) : (
-                    <div className="code-preview">
-                      <SyntaxHighlighter 
-                        language={selectedFile.language} 
-                        style={oneDark} 
-                        showLineNumbers={true} 
-                        wrapLongLines={false}
-                      >
-                        {selectedFile.content}
-                      </SyntaxHighlighter>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="no-file-selected">
-                <FileCode size={48} />
-                <h3>No file selected</h3>
-                <p>Select a file from the sidebar to view or edit its contents</p>
-                <button 
-                  onClick={() => handleCreateNewFile()} 
-                  className="create-file-button"
-                  aria-label="Create new file"
-                >
-                  <FilePlus size={16} />Create New File
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  });
-
   // 🎯 MAIN RENDER
   return (
     <ErrorBoundary>
@@ -4258,28 +4488,27 @@ if __name__ == "__main__":
                 disabled={isLoading}
                 maxLength={APP_CONFIG.LIMITS.MAX_INPUT_LENGTH}
                 aria-label="Message input"
-                // 🎯 ADD: iOS-specific keyboard fixes
+                // 🎯 ADD: Mobile keyboard fixes
                 onTouchStart={(e) => {
                   if (isMobile) {
-                    // Prevent default touch behaviors that might close keyboard
                     e.stopPropagation();
                   }
                 }}
                 onTouchMove={(e) => {
                   if (isMobile) {
-                    // Allow scrolling but keep keyboard open
                     e.stopPropagation();
                   }
                 }}
                 onBlur={(e) => {
-                  // 🎯 PREVENT UNWANTED BLUR ON IOS
+                  // 🎯 PREVENT UNWANTED BLUR ON MOBILE
                   if (isMobile && isLoading) {
                     e.preventDefault();
                     setTimeout(() => e.target.focus(), 10);
                   }
                 }}
-                // Force iOS to show "Done" button instead of hiding keyboard
+                // Force mobile to show proper keyboard
                 enterKeyHint="send"
+                inputMode="text"
               />
               <div className="input-actions">
                 <button onClick={() => fileInputRef.current?.click()} className="image-upload-button" disabled={isLoading} title="Attach image" aria-label="Attach image">

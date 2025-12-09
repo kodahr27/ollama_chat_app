@@ -125,6 +125,31 @@ body {
   flex-direction: column;
 }
 
+/* 🎯 ANDROID DETECTION */
+.android .code-editor {
+  font-size: 16px !important;
+  padding: var(--spacing-md);
+  height: calc(100vh - 250px) !important;
+  min-height: 400px !important;
+  max-height: 80vh !important;
+  -webkit-overflow-scrolling: touch !important;
+  overflow-y: auto !important;
+  resize: none !important;
+  position: relative;
+}
+
+.android.keyboard-open .code-editor {
+  height: calc(100vh - 350px) !important;
+}
+
+.android .artifact-manager.mobile .code-editor {
+  height: calc(100vh - 200px) !important;
+}
+
+.android.keyboard-open .artifact-manager.mobile .code-editor {
+  height: calc(100vh - 300px) !important;
+}
+
 /* 🎯 SCROLLBAR STYLES */
 ::-webkit-scrollbar {
   width: 8px;
@@ -1566,7 +1591,7 @@ pre {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 16px !important; /* Critical: Prevents iOS zoom */
+  font-size: 16px !important;
   line-height: 1.5;
   padding: var(--spacing-lg);
   resize: none;
@@ -1574,18 +1599,27 @@ pre {
   white-space: pre;
   overflow: auto;
   width: 100%;
-  /* Remove dynamic height on mobile */
   height: 100%;
   min-height: 400px;
   -webkit-overflow-scrolling: touch;
-  /* Prevent iOS interference */
   -webkit-appearance: none;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
 
+.code-editor.android {
+  height: calc(100vh - 250px) !important;
+  min-height: 500px !important;
+  max-height: none !important;
+  position: relative;
+  -webkit-overflow-scrolling: touch;
+  overflow-y: scroll;
+  transition: none !important;
+  animation: none !important;
+}
+
 .code-editor:focus {
-  outline: 2px solid var(--primary-color);
+  outline: 2px solid var(--accent-primary);
   outline-offset: -2px;
 }
 
@@ -1942,6 +1976,133 @@ pre {
   line-height: 1.4;
 }
 
+/* 🎯 STORAGE WARNING */
+.storage-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-md);
+  padding: var(--spacing-lg);
+  background: rgba(219, 68, 55, 0.1);
+  border: 1px solid rgba(219, 68, 55, 0.3);
+  border-radius: var(--radius-lg);
+  margin-top: var(--spacing-xl);
+}
+
+.warning-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.warning-content strong {
+  color: var(--error);
+}
+
+.warning-content p {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+/* 🎯 IMPORT DIALOG */
+.import-dialog {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+.import-dialog-content {
+  background: var(--bg-primary);
+  border-radius: var(--radius-xl);
+  padding: var(--spacing-xl);
+  max-width: 400px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.import-dropzone {
+  border: 2px dashed var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-2xl);
+  text-align: center;
+  margin: var(--spacing-lg) 0;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.import-dropzone:hover {
+  border-color: var(--accent-primary);
+  background: var(--bg-hover);
+}
+
+.import-file-input {
+  display: none;
+}
+
+.import-dropzone-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-md);
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.import-file-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.import-dialog-actions {
+  display: flex;
+  gap: var(--spacing-md);
+  margin-top: var(--spacing-lg);
+}
+
+.import-btn {
+  flex: 1;
+  padding: var(--spacing-md);
+  border-radius: var(--radius-md);
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+.import-btn.primary {
+  background: var(--accent-primary);
+  color: white;
+}
+
+.import-btn.primary:hover {
+  background: var(--accent-hover);
+}
+
+.import-btn.secondary {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.import-btn.secondary:hover {
+  background: var(--bg-hover);
+}
+
+.import-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* 🎯 STORAGE BREAKDOWN */
 .storage-breakdown {
   display: flex;
@@ -2082,6 +2243,17 @@ pre {
   border-bottom: 1px solid rgba(244, 180, 0, 0.3);
   color: var(--warning);
   flex-shrink: 0;
+}
+
+.warning-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.warning-text strong {
+  color: var(--warning);
 }
 
 .diff-viewer-description {
@@ -2490,33 +2662,6 @@ pre {
 
 .action-button.secondary {
   background: transparent;
-}
-
-.storage-warning {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-md);
-  padding: var(--spacing-lg);
-  background: rgba(219, 68, 55, 0.1);
-  border: 1px solid rgba(219, 68, 55, 0.3);
-  border-radius: var(--radius-lg);
-  margin-top: var(--spacing-xl);
-}
-
-.warning-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
-}
-
-.warning-content strong {
-  color: var(--error);
-}
-
-.warning-content p {
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
 }
 
 /* 🎯 SIDE PANEL */
@@ -3615,6 +3760,103 @@ pre {
   border: 0;
 }
 
+/* 🎯 ANDROID SPECIFIC FIXES */
+@supports (-webkit-touch-callout: none) and (not (-webkit-overflow-scrolling: none)) {
+  .android .code-editor {
+    height: 400px !important;
+    min-height: 400px !important;
+    max-height: 70vh !important;
+    position: relative;
+    overflow-y: auto !important;
+    transition: none !important;
+    animation: none !important;
+    padding-bottom: 300px !important;
+    resize: none !important;
+  }
+  
+  .android.keyboard-open .code-editor {
+    height: calc(100vh - 300px) !important;
+  }
+  
+  .android .artifact-manager.mobile .editor-content {
+    height: 500px !important;
+    min-height: 500px !important;
+    position: relative;
+  }
+  
+  .android.keyboard-open .artifact-manager.mobile .editor-content {
+    height: calc(100vh - 250px) !important;
+  }
+  
+  .android .artifact-manager.mobile {
+    height: 100% !important;
+    overflow: hidden !important;
+  }
+  
+  .android.keyboard-open .artifact-manager.mobile {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10000;
+  }
+}
+
+/* 🎯 GLOBAL MOBILE FIXES */
+@media (hover: none) and (pointer: coarse) {
+  textarea.code-editor {
+    animation: none !important;
+    transition: none !important;
+    -webkit-tap-highlight-color: transparent !important;
+    touch-action: manipulation;
+    -webkit-overflow-scrolling: auto !important;
+  }
+  
+  body.keyboard-open {
+    position: fixed;
+    width: 100%;
+  }
+}
+
+/* 🎯 ENHANCED ANDROID EDITOR STYLING */
+.android .code-editor:focus {
+  box-shadow: 0 0 0 1px var(--accent-primary) !important;
+  border-color: var(--accent-primary) !important;
+  outline: none !important;
+}
+
+/* 🎯 FIX FOR ANDROID CHROME'S VIRTUAL KEYBOARD */
+@media (max-width: 768px) {
+  .code-editor {
+    position: relative;
+    z-index: 1000;
+    transform: translate3d(0, 0, 0);
+    contain: strict;
+  }
+  
+  .android .editor-container {
+    height: calc(100vh - 300px) !important;
+    min-height: 300px !important;
+  }
+  
+  .android .editor-content {
+    height: 100% !important;
+    flex: 1 1 auto !important;
+  }
+}
+
+/* 🎯 ANDROID 10+ SPECIFIC FIXES */
+@supports (height: 100dvh) {
+  .android .code-editor {
+    max-height: calc(100dvh - 200px) !important;
+  }
+  
+  .android .artifact-manager.mobile .editor-content {
+    height: calc(100dvh - 150px) !important;
+  }
+}
+
 /* 🎯 RESPONSIVE DESIGN */
 @media (max-width: 768px) {
   :root {
@@ -3869,95 +4111,5 @@ pre {
     max-width: none;
     border: 1px solid #ccc !important;
     break-inside: avoid;
-  }
-}
-
-/* iOS Safari specific - CRITICAL */
-@supports (-webkit-touch-callout: none) {
-  .code-editor {
-    /* Fixed height prevents keyboard closing */
-    height: calc(100vh - 300px) !important;
-    min-height: 500px !important;
-    max-height: none !important;
-    /* Prevent any layout shifts */
-    position: relative;
-    /* Ensure smooth scrolling */
-    -webkit-overflow-scrolling: touch;
-    overflow-y: scroll;
-  }
-
-   .editor-content {
-    /* Prevent flex from causing layout shifts */
-    height: 100%;
-    max-height: calc(100vh - 200px);
-  }
-
-    .artifact-manager.mobile .editor-content {
-    height: calc(100vh - 200px);
-    max-height: calc(100vh - 200px);
-  }
-
-    .editor-container {
-    height: calc(100vh - 200px);
-    max-height: calc(100vh - 200px);
-  }
-  
-  .artifact-manager.mobile .editor-container {
-    height: calc(100vh - 150px);
-  }
-
-    html {
-    height: 100%;
-  }
-  
-  body {
-    height: 100%;
-    overflow: hidden;
-  }
-  
-  /* Fix for artifact manager on mobile */
-  .artifact-manager.mobile {
-    height: 100%;
-    max-height: 100vh;
-    overflow: hidden;
-  }
-  
-  .artifact-manager.mobile .file-editor-panel {
-    height: 100%;
-    overflow: hidden;
-  }
-  
-  /* Prevent any textarea from triggering layout recalculation */
-  textarea.code-editor {
-    /* Lock the height completely */
-    height: calc(100vh - 250px) !important;
-    /* Prevent any resize behavior */
-    resize: none !important;
-    /* Prevent scroll issues */
-    overflow-y: auto !important;
-    -webkit-overflow-scrolling: touch !important;
-  }
-  
-  /* Mobile specific locking */
-  .artifact-manager.mobile textarea.code-editor {
-    height: calc(100vh - 200px) !important;
-    position: relative;
-  }
-}
-
-/* Mobile specific */
-.artifact-manager.mobile .code-editor {
-  font-size: 16px !important; /* Must be 16px+ to prevent zoom */
-  padding: var(--spacing-md);
-  height: calc(100vh - 250px) !important;
-  min-height: 400px !important;
-}
-
-/* Desktop - allow flexible height */
-@media (min-width: 769px) {
-  .code-editor {
-    height: auto;
-    min-height: 300px;
-    max-height: 80vh;
   }
 }
