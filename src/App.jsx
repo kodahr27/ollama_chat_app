@@ -1604,8 +1604,9 @@ export default function App() {
     return getEnhancedFileContext(currentArtifactsRef.current, input);
   }, [getEnhancedFileContext, input]);
 
-  // 🎯 CREATE NEW FILE FUNCTION
+  // 🎯 FIXED: handleCreateNewFile function - prevents keyboard closing
   const handleCreateNewFile = useCallback((folderPath = '') => {
+    // Prevent default behavior that might close keyboard
     const defaultExtensions = {
       'src/components': '.jsx',
       'src': '.js',
@@ -1628,45 +1629,45 @@ export default function App() {
     
     const defaultContent = {
       'jsx': `// ${newFileName}
-import React from 'react';
-
-export default function NewComponent() {
-  return (
-    <div>
-      New Component
-    </div>
-  );
-}`,
+  import React from 'react';
+  
+  export default function NewComponent() {
+    return (
+      <div>
+        New Component
+      </div>
+    );
+  }`,
       'js': `// ${newFileName}
-function newFunction() {
-  console.log('Hello World');
-}`,
+  function newFunction() {
+    console.log('Hello World');
+  }`,
       'css': `/* ${newFileName} */
-.new-class {
-  color: blue;
-}`,
+  .new-class {
+    color: blue;
+  }`,
       'html': `<!-- ${newFileName} -->
-<!DOCTYPE html>
-<html>
-<head>
-  <title>New File</title>
-</head>
-<body>
-  <h1>New File</h1>
-</body>
-</html>`,
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <title>New File</title>
+  </head>
+  <body>
+    <h1>New File</h1>
+  </body>
+  </html>`,
       'py': `# ${newFileName}
-def main():
-    print("Hello World")
-
-if __name__ == "__main__":
-    main()`,
+  def main():
+      print("Hello World")
+  
+  if __name__ == "__main__":
+      main()`,
       'json': `{
-  "name": "new-file",
-  "version": "1.0.0"
-}`
+    "name": "new-file",
+    "version": "1.0.0"
+  }`
     }[language] || `// ${newFileName}\n// New file created`;
-
+  
     const newFile = {
       path: newFileName,
       content: defaultContent,
@@ -1679,36 +1680,10 @@ if __name__ == "__main__":
       timestamp: new Date().toISOString()
     };
     
-    const updatedArtifacts = [...currentArtifacts, newFile];
-    
-    // 🎯 SAVE IMMEDIATELY
-    setArtifacts(prev => ({ 
-      ...prev, 
-      [currentConversationId]: updatedArtifacts 
-    }));
-    
-    const updatedArtifactsObj = { 
-      ...artifacts, 
-      [currentConversationId]: updatedArtifacts 
-    };
-    
-    saveArtifacts(updatedArtifactsObj);
-    
-    setTimeout(() => {
-      setSelectedFile(newFile);
-      setEditedContent(newFile.content);
-      setIsEditing(true);
-      setViewMode('editor');
-      if (isMobile) setMobilePanel('editor');
-    }, 100);
-    
-    if (folderPath) {
-      setExpandedFolders(prev => new Set(prev).add(folderPath));
-    }
-    
-    setShowCreateMenu(false);
-    setShowEmptyState(false);
-  }, [currentArtifacts, currentConversationId, artifacts, saveArtifacts, isMobile]);
+    // 🎯 FIX: Ensure we have a conversation to save to
+    let convId = currentConversationId;
+    if (!convId) {
+      convId =
 
   // 🎯 CREATE NEW FOLDER FUNCTION
   const handleCreateNewFolder = useCallback((parentPath = '') => {
