@@ -471,7 +471,6 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(false);
   const [viewingEdit, setViewingEdit] = useState(null);
   const [showStorageManagement, setShowStorageManagement] = useState(false);
-  const [currentEdits, setCurrentEdits] = useState([]);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
@@ -2081,8 +2080,8 @@ if __name__ == "__main__":
     setViewingEdit(edit);
   }, []);
 
-  const handleApplyEditFromViewer = useCallback((editId) => {
-    const edit = currentEdits.find(e => e.id === editId);
+  // 🎯 FIXED: handleApplyEditFromViewer now works correctly
+  const handleApplyEditFromViewer = useCallback((edit) => {
     if (!edit) return;
     
     let targetFile = findTargetFileForEdit(currentArtifacts, edit.path);
@@ -2111,6 +2110,25 @@ if __name__ == "__main__":
     
     handleArtifactUpdate(updatedArtifacts);
     
+    // Mark the edit as applied in the message
+    if (viewingEdit) {
+      setMessages(prev => prev.map(msg => {
+        if (msg.parsedResponse?.edits) {
+          const updatedEdits = msg.parsedResponse.edits.map(e => 
+            e.id === edit.id ? { ...e, applied: true } : e
+          );
+          return {
+            ...msg,
+            parsedResponse: {
+              ...msg.parsedResponse,
+              edits: updatedEdits
+            }
+          };
+        }
+        return msg;
+      }));
+    }
+    
     if (appliedCount === edit.operations.length) {
       alert(`✅ Successfully applied all ${appliedCount} changes to ${targetFile.path}`);
     } else {
@@ -2128,7 +2146,9 @@ if __name__ == "__main__":
       
       alert(message);
     }
-  }, [currentArtifacts, handleArtifactUpdate, currentEdits, findTargetFileForEdit, applySearchReplace]);
+    
+    setViewingEdit(null);
+  }, [currentArtifacts, handleArtifactUpdate, findTargetFileForEdit, applySearchReplace, viewingEdit]);
 
   // 🎯 RENDER FUNCTIONS
   const renderMessage = useCallback((message) => {
@@ -3411,7 +3431,8 @@ if __name__ == "__main__":
     const handleApply = useCallback(async () => {
       setApplying(true);
       try {
-        handleApplyEditFromViewer(edit.id);
+        // Directly call handleApplyEditFromViewer with the edit
+        handleApplyEditFromViewer(edit);
         setTimeout(() => {
           onClose();
         }, 500);
