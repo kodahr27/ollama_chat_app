@@ -1060,32 +1060,54 @@ export default function App() {
     }
   }, [artifacts, conversations]);
 
-  const findTargetFileForEdit = useCallback((artifacts, editPath) => {
-    if (!artifacts || artifacts.length === 0) return null;
-    
-    const limitedArtifacts = artifacts.slice(0, 50);
-    
-    const normalizePath = (path) => path.toLowerCase().replace(/\\/g, '/').replace(/^\.?\//, '');
-    const normalizedEditPath = normalizePath(editPath);
-    
-    for (const art of limitedArtifacts) {
-      if (normalizePath(art.path) === normalizedEditPath) return art;
+// Replace the findTargetFileForEdit function with this improved version:
+const findTargetFileForEdit = useCallback((artifacts, editPath) => {
+  if (!artifacts || artifacts.length === 0) return null;
+  
+  const limitedArtifacts = artifacts.slice(0, 50);
+  
+  const normalizePath = (path) => {
+    if (!path) return '';
+    return path.toLowerCase()
+      .replace(/\\/g, '/')
+      .replace(/^\.?\//, '')
+      .replace(/\s+/g, '-')
+      .trim();
+  };
+  
+  const normalizedEditPath = normalizePath(editPath);
+  
+  // 🎯 FIX 1: Exact match first
+  for (const art of limitedArtifacts) {
+    if (normalizePath(art.path) === normalizedEditPath) return art;
+  }
+  
+  // 🎯 FIX 2: Match by filename only (without path)
+  const editFileName = normalizedEditPath.split('/').pop();
+  for (const art of limitedArtifacts) {
+    const artFileName = normalizePath(art.path).split('/').pop();
+    if (artFileName === editFileName) return art;
+  }
+  
+  // 🎯 FIX 3: Partial match (file contains edit path or vice versa)
+  for (const art of limitedArtifacts) {
+    const normalizedArtPath = normalizePath(art.path);
+    if (normalizedArtPath.includes(normalizedEditPath) || 
+        normalizedEditPath.includes(normalizedArtPath)) {
+      return art;
     }
-    
-    const editFileName = normalizedEditPath.split('/').pop();
-    for (const art of limitedArtifacts) {
-      if (normalizePath(art.path).split('/').pop() === editFileName) return art;
+  }
+  
+  // 🎯 FIX 4: Case-insensitive contains match
+  for (const art of limitedArtifacts) {
+    if (art.path.toLowerCase().includes(editPath.toLowerCase()) ||
+        editPath.toLowerCase().includes(art.path.toLowerCase())) {
+      return art;
     }
-    
-    for (const art of limitedArtifacts) {
-      if (normalizePath(art.path).includes(normalizedEditPath) || 
-          normalizedEditPath.includes(normalizePath(art.path))) {
-        return art;
-      }
-    }
-    
-    return null;
-  }, []);
+  }
+  
+  return null;
+}, []);
 
   // 🎯 FIXED: getEnhancedFileContext now uses currentArtifacts to get latest content
   const getEnhancedFileContext = useCallback((artifacts, userInput) => {
@@ -1536,19 +1558,21 @@ export default function App() {
     input.click();
   }, [saveArtifacts]);
 
-  const handleInputChange = useCallback((e) => {
-    const value = e.target.value;
-    if (value.length <= APP_CONFIG.LIMITS.MAX_INPUT_LENGTH) {
-      setInput(value);
-      const ta = textareaRef.current;
-      if (ta) { 
+// Update the handleInputChange function:
+const handleInputChange = useCallback((e) => {
+  const value = e.target.value;
+  if (value.length <= APP_CONFIG.LIMITS.MAX_INPUT_LENGTH) {
+    setInput(value);
+    const ta = textareaRef.current;
+    if (ta) { 
+      // 🎯 FIX: Use requestAnimationFrame to prevent iOS keyboard closing
+      requestAnimationFrame(() => {
         ta.style.height = "auto"; 
-        setTimeout(() => {
-          ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-        }, 10);
-      }
+        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+      });
     }
-  }, []);
+  }
+}, []);
 
   const fetchModels = useCallback(async (isRetry = false) => {
     setIsLoadingModels(true);
@@ -1604,86 +1628,136 @@ export default function App() {
     return getEnhancedFileContext(currentArtifactsRef.current, input);
   }, [getEnhancedFileContext, input]);
 
-  // 🎯 FIXED: handleCreateNewFile function - prevents keyboard closing
-  const handleCreateNewFile = useCallback((folderPath = '') => {
-    // Prevent default behavior that might close keyboard
-    const defaultExtensions = {
-      'src/components': '.jsx',
-      'src': '.js',
-      'styles': '.css',
-      'utils': '.js',
-      'public': '.html',
-      '': '.txt'
-    };
-    
-    let extension = '.txt';
-    for (const [path, ext] of Object.entries(defaultExtensions)) {
-      if (folderPath.includes(path) || (!folderPath && path === '')) {
-        extension = ext;
-        break;
-      }
+const handleCreateNewFile = useCallback((folderPath = '') => {
+  // Prevent default behavior that might close keyboard
+  const defaultExtensions = {
+    'src/components': '.jsx',
+    'src': '.js',
+    'styles': '.css',
+    'utils': '.js',
+    'public': '.html',
+    '': '.txt'
+  };
+  
+  let extension = '.txt';
+  for (const [path, ext] of Object.entries(defaultExtensions)) {
+    if (folderPath.includes(path) || (!folderPath && path === '')) {
+      extension = ext;
+      break;
     }
-    
-    const newFileName = `${folderPath ? folderPath + '/' : ''}new-file-${Date.now()}${extension}`;
-    const language = getLanguageFromPath(newFileName);
-    
-    const defaultContent = {
-      'jsx': `// ${newFileName}
-  import React from 'react';
+  }
   
-  export default function NewComponent() {
-    return (
-      <div>
-        New Component
-      </div>
-    );
-  }`,
-      'js': `// ${newFileName}
-  function newFunction() {
-    console.log('Hello World');
-  }`,
-      'css': `/* ${newFileName} */
-  .new-class {
-    color: blue;
-  }`,
-      'html': `<!-- ${newFileName} -->
-  <!DOCTYPE html>
-  <html>
-  <head>
-    <title>New File</title>
-  </head>
-  <body>
-    <h1>New File</h1>
-  </body>
-  </html>`,
-      'py': `# ${newFileName}
-  def main():
-      print("Hello World")
+  const newFileName = `${folderPath ? folderPath + '/' : ''}new-file-${Date.now()}${extension}`;
+  const language = getLanguageFromPath(newFileName);
   
-  if __name__ == "__main__":
-      main()`,
-      'json': `{
-    "name": "new-file",
-    "version": "1.0.0"
-  }`
-    }[language] || `// ${newFileName}\n// New file created`;
+  const defaultContent = {
+    'jsx': `// ${newFileName}
+import React from 'react';
+
+export default function NewComponent() {
+  return (
+    <div>
+      New Component
+    </div>
+  );
+}`,
+    'js': `// ${newFileName}
+function newFunction() {
+  console.log('Hello World');
+}`,
+    'css': `/* ${newFileName} */
+.new-class {
+  color: blue;
+}`,
+    'html': `<!-- ${newFileName} -->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>New File</title>
+</head>
+<body>
+  <h1>New File</h1>
+</body>
+</html>`,
+    'py': `# ${newFileName}
+def main():
+    print("Hello World")
+
+if __name__ == "__main__":
+    main()`,
+    'json': `{
+  "name": "new-file",
+  "version": "1.0.0"
+}`
+  }[language] || `// ${newFileName}\n// New file created`;
+
+  const newFile = {
+    path: newFileName,
+    content: defaultContent,
+    language: language,
+    id: generateSafeId(newFileName),
+    name: newFileName.split('/').pop(),
+    fullPath: newFileName,
+    type: 'file',
+    createdBy: 'user',
+    timestamp: new Date().toISOString()
+  };
   
-    const newFile = {
-      path: newFileName,
-      content: defaultContent,
-      language: language,
-      id: generateSafeId(newFileName),
-      name: newFileName.split('/').pop(),
-      fullPath: newFileName,
-      type: 'file',
-      createdBy: 'user',
-      timestamp: new Date().toISOString()
+  // 🎯 FIX: Ensure we have a conversation to save to
+  let convId = currentConversationId;
+  if (!convId) {
+    convId = generateSafeId('conv');
+    const newConversation = {
+      id: convId,
+      title: 'New Conversation',
+      messages: [],
+      lastUpdated: new Date().toISOString(),
+      active: true,
+      artifactCount: 1
     };
     
-    // 🎯 FIX: Ensure we have a conversation to save to
-    let convId = currentConversationId;
-    if (!convId) {
-      convId =
+    const savedConversations = JSON.parse(localStorage.getItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS) || '[]');
+    const updatedConversations = [newConversation, ...savedConversations.map(c => ({ ...c, active: false }))];
+    
+    localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
+    setConversations(updatedConversations);
+    setCurrentConversationId(convId);
+  }
+  
+  const updatedArtifacts = [...currentArtifacts, newFile];
+  
+  // 🎯 SAVE IMMEDIATELY
+  setArtifacts(prev => ({ 
+    ...prev, 
+    [convId]: updatedArtifacts 
+  }));
+  
+  const updatedArtifactsObj = { 
+    ...artifacts, 
+    [convId]: updatedArtifacts 
+  };
+  
+  saveArtifacts(updatedArtifactsObj);
+  
+  setSelectedFile(newFile);
+  setEditedContent(newFile.content);
+  setIsEditing(true);
+  setViewMode('editor');
+  
+  if (isMobile) {
+    setMobilePanel('editor');
+  }
+  
+  setShowEmptyState(false);
+  setShowArtifacts(true);
+  setShowCreateMenu(false);
+  
+  // Focus on the editor
+  setTimeout(() => {
+    const editor = document.querySelector('.code-editor');
+    if (editor) editor.focus();
+  }, 100);
+}, [currentConversationId, currentArtifacts, artifacts, saveArtifacts, isMobile]);
 
   // 🎯 CREATE NEW FOLDER FUNCTION
   const handleCreateNewFolder = useCallback((parentPath = '') => {
@@ -2055,75 +2129,101 @@ export default function App() {
     setViewingEdit(edit);
   }, []);
 
-  // 🎯 FIXED: handleApplyEditFromViewer now works correctly
-  const handleApplyEditFromViewer = useCallback((edit) => {
-    if (!edit) return;
+// Replace the handleApplyEditFromViewer function:
+const handleApplyEditFromViewer = useCallback((edit) => {
+  if (!edit) return;
+  
+  let targetFile = findTargetFileForEdit(currentArtifacts, edit.path);
+  
+  if (!targetFile) {
+    console.error('Target file not found:', edit.path, 'Available files:', currentArtifacts.map(f => f.path));
     
-    let targetFile = findTargetFileForEdit(currentArtifacts, edit.path);
+    // 🎯 FIX: Try to find file by showing a selection dialog
+    const matchingFiles = currentArtifacts.filter(art => 
+      art.path.toLowerCase().includes(edit.path.toLowerCase()) ||
+      edit.path.toLowerCase().includes(art.path.toLowerCase())
+    );
+    
+    if (matchingFiles.length === 1) {
+      // Auto-select if only one match
+      targetFile = matchingFiles[0];
+      console.log('Auto-selected file:', targetFile.path, 'for edit path:', edit.path);
+    } else if (matchingFiles.length > 0) {
+      // Let user choose if multiple matches
+      const fileNames = matchingFiles.map(f => f.path).join('\n');
+      const selected = prompt(
+        `Multiple files match "${edit.path}". Which file do you want to edit?\n\nAvailable files:\n${fileNames}\n\nEnter the exact filename:`,
+        matchingFiles[0].path
+      );
+      
+      if (selected) {
+        targetFile = matchingFiles.find(f => f.path === selected) || matchingFiles[0];
+      }
+    }
     
     if (!targetFile) {
-      console.error('Target file not found:', edit.path);
-      alert(`Error: File "${edit.path}" not found in current project.`);
+      alert(`Error: File "${edit.path}" not found in current project.\n\nAvailable files:\n${currentArtifacts.map(f => f.path).join('\n')}`);
       return;
     }
-    
-    const { result, appliedCount, failedOps } = applySearchReplace(
-      targetFile.content,
-      edit.operations
-    );
-    
-    if (appliedCount === 0) {
-      alert(`⚠️ No operations were applied. Please check that the search patterns match the current file content.`);
-      return;
-    }
-    
-    const updatedArtifacts = currentArtifacts.map(art => 
-      art.path === targetFile.path 
-        ? { ...art, content: result }
-        : art
-    );
-    
-    handleArtifactUpdate(updatedArtifacts);
-    
-    // Mark the edit as applied in the message
-    if (viewingEdit) {
-      setMessages(prev => prev.map(msg => {
-        if (msg.parsedResponse?.edits) {
-          const updatedEdits = msg.parsedResponse.edits.map(e => 
-            e.id === edit.id ? { ...e, applied: true } : e
-          );
-          return {
-            ...msg,
-            parsedResponse: {
-              ...msg.parsedResponse,
-              edits: updatedEdits
-            }
-          };
-        }
-        return msg;
-      }));
-    }
-    
-    if (appliedCount === edit.operations.length) {
-      alert(`✅ Successfully applied all ${appliedCount} changes to ${targetFile.path}`);
-    } else {
-      let message = `Applied ${appliedCount} of ${edit.operations.length} changes to ${targetFile.path}.`;
-      
-      if (failedOps.length > 0) {
-        message += `\n\n${failedOps.length} operation(s) failed:`;
-        failedOps.slice(0, 3).forEach(f => {
-          message += `\n• Operation ${f.index}: ${f.reason}`;
-        });
-        if (failedOps.length > 3) {
-          message += `\n• ... and ${failedOps.length - 3} more`;
-        }
+  }
+  
+  const { result, appliedCount, failedOps } = applySearchReplace(
+    targetFile.content,
+    edit.operations
+  );
+  
+  if (appliedCount === 0) {
+    alert(`⚠️ No operations were applied. Please check that the search patterns match the current file content.`);
+    return;
+  }
+  
+  const updatedArtifacts = currentArtifacts.map(art => 
+    art.path === targetFile.path 
+      ? { ...art, content: result }
+      : art
+  );
+  
+  handleArtifactUpdate(updatedArtifacts);
+  
+  // Mark the edit as applied in the message
+  if (viewingEdit) {
+    setMessages(prev => prev.map(msg => {
+      if (msg.parsedResponse?.edits) {
+        const updatedEdits = msg.parsedResponse.edits.map(e => 
+          e.id === edit.id ? { ...e, applied: true, targetFile: targetFile.path } : e
+        );
+        return {
+          ...msg,
+          parsedResponse: {
+            ...msg.parsedResponse,
+            edits: updatedEdits
+          }
+        };
       }
-      
-      alert(message);
+      return msg;
+    }));
+  }
+  
+  if (appliedCount === edit.operations.length) {
+    alert(`✅ Successfully applied all ${appliedCount} changes to ${targetFile.path}`);
+  } else {
+    let message = `Applied ${appliedCount} of ${edit.operations.length} changes to ${targetFile.path}.`;
+    
+    if (failedOps.length > 0) {
+      message += `\n\n${failedOps.length} operation(s) failed:`;
+      failedOps.slice(0, 3).forEach(f => {
+        message += `\n• Operation ${f.index}: ${f.reason}`;
+      });
+      if (failedOps.length > 3) {
+        message += `\n• ... and ${failedOps.length - 3} more`;
+      }
     }
     
-    setViewingEdit(null);
-  }, [currentArtifacts, handleArtifactUpdate, findTargetFileForEdit, applySearchReplace, viewingEdit]);
+    alert(message);
+  }
+  
+  setViewingEdit(null);
+}, [currentArtifacts, handleArtifactUpdate, findTargetFileForEdit, applySearchReplace, viewingEdit]);
 
   // 🎯 RENDER FUNCTIONS
   const renderMessage = useCallback((message) => {
@@ -3396,12 +3496,25 @@ export default function App() {
       [currentArtifacts, edit.path]
     );
 
-    useEffect(() => {
-      if (edit.operations && file.content) {
-        const { result, appliedCount, failedOps } = applySearchReplace(file.content, edit.operations);
-        setPreviewResult({ result, appliedCount, failedOps });
-      }
-    }, [edit.operations, file.content]);
+  // Update the useEffect in DiffViewerPage to handle missing files better:
+  useEffect(() => {
+    if (edit.operations && file.content) {
+      const { result, appliedCount, failedOps } = applySearchReplace(file.content, edit.operations);
+      setPreviewResult({ result, appliedCount, failedOps });
+    } else if (!file.content && edit.operations) {
+      // 🎯 FIX: Show warning if file exists but has no content
+      console.warn('File exists but has no content:', edit.path);
+      setPreviewResult({ 
+        result: '', 
+        appliedCount: 0, 
+        failedOps: [{ 
+          index: 1, 
+          reason: 'File exists but has no content to modify',
+          search: edit.operations[0]?.search || ''
+        }] 
+      });
+    }
+  }, [edit.operations, file.content]);
 
     const handleApply = useCallback(async () => {
       setApplying(true);
@@ -3562,29 +3675,65 @@ export default function App() {
       setShowEmptyState(false);
     }, [isMobile]);
   
-    const handleSave = useCallback(() => {
-      if (selectedFile) {
-        const updatedArtifacts = currentArtifacts.map(art => 
-          art.path === selectedFile.path ? { ...art, content: editedContent } : art
-        );
-        
-        // 🎯 SAVE IMMEDIATELY
-        setArtifacts(prev => ({ 
-          ...prev, 
-          [currentConversationId]: updatedArtifacts 
-        }));
-        
-        const updatedArtifactsObj = { 
-          ...artifacts, 
-          [currentConversationId]: updatedArtifacts 
-        };
-        
-        saveArtifacts(updatedArtifactsObj);
-        
-        setIsEditing(false);
-        setShowEmptyState(false);
+// In the ArtifactManager component, replace the handleSave function:
+  const handleSave = useCallback(() => {
+    if (selectedFile) {
+      const updatedArtifacts = currentArtifacts.map(art => 
+        art.path === selectedFile.path ? { ...art, content: editedContent } : art
+      );
+      
+      // 🎯 FIX: Batch the updates to prevent re-renders
+      setArtifacts(prev => ({ 
+        ...prev, 
+        [currentConversationId]: updatedArtifacts 
+      }));
+      
+      const updatedArtifactsObj = { 
+        ...artifacts, 
+        [currentConversationId]: updatedArtifacts 
+      };
+      
+      saveArtifacts(updatedArtifactsObj);
+      
+      setIsEditing(false);
+      setShowEmptyState(false);
+      
+      // 🎯 FIX: Update selectedFile content without causing re-render
+      setSelectedFile(prev => prev ? { ...prev, content: editedContent } : null);
+    }
+  }, [selectedFile, editedContent, currentArtifacts, currentConversationId, artifacts, saveArtifacts]);
+
+  // 🎯 ADD: Debounced content update to prevent keyboard closing
+  const handleEditorChange = useCallback((e) => {
+    const value = e.target.value;
+    setEditedContent(value);
+    
+    // 🎯 FIX: Use requestAnimationFrame to prevent keyboard closing
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+        textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
       }
-    }, [selectedFile, editedContent, currentArtifacts, currentConversationId, artifacts, saveArtifacts]);
+    });
+  }, []);
+
+  // 🎯 UPDATE: The editor textarea in the ArtifactManager
+  <textarea
+    ref={textareaRef}
+    value={editedContent}
+    onChange={handleEditorChange} // Use the new handler
+    className="code-editor"
+    spellCheck="false"
+    disabled={!isEditing}
+    aria-label="Code editor"
+    onBlur={(e) => {
+      // 🎯 FIX: Prevent losing focus on mobile
+      if (isMobile && isEditing) {
+        e.preventDefault();
+        setTimeout(() => e.target.focus(), 10);
+      }
+    }}
+  />
   
     const handleCancelEdit = useCallback(() => {
       if (selectedFile) setEditedContent(selectedFile.content);
@@ -4096,6 +4245,17 @@ export default function App() {
                 disabled={isLoading}
                 maxLength={APP_CONFIG.LIMITS.MAX_INPUT_LENGTH}
                 aria-label="Message input"
+                // 🎯 ADD: Prevent iOS keyboard closing
+                onTouchStart={(e) => {
+                  if (isMobile) {
+                    e.stopPropagation();
+                  }
+                }}
+                onTouchEnd={(e) => {
+                  if (isMobile) {
+                    e.stopPropagation();
+                  }
+                }}
               />
               <div className="input-actions">
                 <button onClick={() => fileInputRef.current?.click()} className="image-upload-button" disabled={isLoading} title="Attach image" aria-label="Attach image">
