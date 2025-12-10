@@ -700,10 +700,16 @@ const ArtifactItem = React.memo(({ artifact, isInProject, messageId, onAddToProj
 // 🎯 OPTIMIZED MESSAGE ROW
 const MessageRow = React.memo(({ message, copied, onCopy, onViewEdit, onAddToProject, currentArtifacts }) => {
   const isUser = message.role === "user";
+  const isAssistant = message.role === "assistant";
   
   const handleCopy = useCallback(() => {
     onCopy(message.id, message.content);
   }, [onCopy, message.id, message.content]);
+  
+  const handleRetry = useCallback(() => {
+    // This would need to be implemented in parent component
+    console.log("Retry requested for message:", message.id);
+  }, [message.id]);
   
   return (
     <motion.div
@@ -716,23 +722,144 @@ const MessageRow = React.memo(({ message, copied, onCopy, onViewEdit, onAddToPro
     >
       <Avatar role={message.role} />
       <div className={`bubble ${isUser ? "bubble-user" : message.isError ? "bubble-error" : "bubble-assistant"}`}>
-        <Message 
-          message={message} 
-          copied={copied}
-          onCopy={onCopy}
-          onViewEdit={onViewEdit}
-          onAddToProject={onAddToProject}
-          currentArtifacts={currentArtifacts}
-        />
-        {message.isStreaming && (
-          <div className="typing-dots-container">
-            <div className="typing-dots"><span></span><span></span><span></span></div>
-          </div>
+        {isAssistant ? (
+          <>
+            {message.content && (
+              <div className="message-text">
+                <ReactMarkdown 
+                  rehypePlugins={[rehypeRaw]} 
+                  components={{
+                    code: ({ node, inline, className, children, ...props }) => {
+                      const match = /language-(\w+)/.exec(className || '');
+                      if (!inline && match) {
+                        return (
+                          <div className="code-block-wrapper">
+                            <div className="code-block-header">
+                              <button className="code-block-toggle">
+                                <span className="code-block-language">{match[1]?.toUpperCase() || 'CODE'}</span>
+                              </button>
+                              <div className="code-block-actions">
+                                <button 
+                                  onClick={() => navigator.clipboard.writeText(String(children))}
+                                  className="code-copy-button"
+                                  title="Copy code"
+                                >
+                                  <Copy size={14} />
+                                </button>
+                              </div>
+                            </div>
+                            <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div" showLineNumbers={false}>
+                              {String(children)}
+                            </SyntaxHighlighter>
+                          </div>
+                        );
+                      }
+                      return <code className="inline-code">{children}</code>;
+                    },
+                    p: ({ children, node }) => {
+                      return <div className="message-paragraph">{children}</div>;
+                    },
+                  }}
+                >
+                  {message.content}
+                </ReactMarkdown>
+              </div>
+            )}
+            
+            {/* Show "Thinking..." or typing indicator when streaming */}
+            {message.isStreaming && (!message.content || message.content.trim() === '') && (
+              <div className="typing-dots-container">
+                <div className="typing-dots"><span></span><span></span><span></span></div>
+              </div>
+            )}
+            
+            {/* Show parsed content if available */}
+            {message.parsedResponse && (
+              <>
+                {message.parsedResponse.instructions?.length > 0 && (
+                  <div className="instructions-display">
+                    <div className="instructions-header">
+                      <Play size={16} />
+                      <span>Instructions</span>
+                    </div>
+                    <div className="instructions-content">
+                      {message.parsedResponse.instructions.slice(0, 5).map((instruction, index) => (
+                        <div key={index} className="instruction-step">
+                          <div className="step-number">{index + 1}</div>
+                          <div className="step-content">
+                            <div className="instruction-text">{instruction}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {message.parsedResponse.edits?.length > 0 && (
+                  <div className="edits-notification">
+                    <div className="edits-header">
+                      <Edit size={16} />
+                      <span>Suggested File Changes ({message.parsedResponse.edits.length})</span>
+                    </div>
+                    <div className="edits-list">
+                      {message.parsedResponse.edits.slice(0, 3).map((edit) => (
+                        <div 
+                          key={edit.id} 
+                          className="edit-notification" 
+                          onClick={() => onViewEdit(edit)}
+                          style={{ cursor: 'pointer' }}
+                          role="button"
+                          tabIndex={0}
+                        >
+                          <FileText size={14} />
+                          <span className="edit-file">{edit.path}</span>
+                          <span className="edit-badge context">
+                            {edit.operationCount} operations
+                          </span>
+                          <ChevronRight size={14} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {message.parsedResponse.artifacts?.length > 0 && (
+                  <ArtifactsDisplay 
+                    artifacts={message.parsedResponse.artifacts}
+                    currentArtifacts={currentArtifacts}
+                    messageId={message.id}
+                    onAddToProject={onAddToProject}
+                  />
+                )}
+              </>
+            )}
+          </>
+        ) : (
+          <div className="user-text">{message.content}</div>
         )}
-        {!message.isStreaming && !isUser && (
+        
+        {/* Error message with retry option */}
+        {message.isError && (
+          <button 
+            onClick={handleRetry}
+            className="retry-button"
+            style={{ marginTop: '8px', padding: '4px 8px', fontSize: '12px' }}
+          >
+            <RotateCcw size={12} /> Retry
+          </button>
+        )}
+        
+        {!isUser && !message.isStreaming && !message.isError && (
           <button onClick={handleCopy} className="copy-button" aria-label="Copy message">
             {copied === message.id ? <Check className="icon-small" /> : <Copy className="icon-small" />}
           </button>
+        )}
+        
+        {/* Keep typing dots at bottom when streaming with content */}
+        {message.isStreaming && message.content && message.content.trim() !== '' && (
+          <div className="typing-dots-container" style={{ marginTop: '8px' }}>
+            <div className="typing-dots"><span></span><span></span><span></span></div>
+          </div>
         )}
       </div>
     </motion.div>
@@ -740,6 +867,9 @@ const MessageRow = React.memo(({ message, copied, onCopy, onViewEdit, onAddToPro
 }, (prevProps, nextProps) => {
   return (
     prevProps.message.id === nextProps.message.id &&
+    prevProps.message.content === nextProps.message.content &&
+    prevProps.message.isStreaming === nextProps.message.isStreaming &&
+    prevProps.message.parsedResponse === nextProps.message.parsedResponse &&
     prevProps.copied === nextProps.copied &&
     prevProps.currentArtifacts === nextProps.currentArtifacts
   );
@@ -848,8 +978,8 @@ const ArtifactManager = React.memo(({
   const debouncedSearchTerm = useDebounce(searchTerm, APP_CONFIG.TIMEOUTS.DEBOUNCE_DELAY);
   const editorTextareaRef = useRef(null);
   const isComposingRef = useRef(false);
-  const [textareaValue, setTextareaValue] = useState('');
-  const textareaValueRef = useRef('');
+  const [editorContent, setEditorContent] = useState('');
+  const fileChangeCounterRef = useRef(0);
 
   const buildFileTree = useCallback((artifacts) => {
     const tree = {};
@@ -916,7 +1046,7 @@ const ArtifactManager = React.memo(({
 
   const handleEditorChange = useCallback((e) => {
     const value = e.target.value;
-    textareaValueRef.current = value;
+    setEditorContent(value);
     
     if (!isComposingRef.current && editorTextareaRef.current) {
       requestAnimationFrame(() => {
@@ -926,8 +1056,6 @@ const ArtifactManager = React.memo(({
         }
       });
     }
-    
-    e.persist?.();
   }, []);
 
   const handleCompositionStart = useCallback((e) => {
@@ -936,27 +1064,29 @@ const ArtifactManager = React.memo(({
 
   const handleCompositionEnd = useCallback((e) => {
     isComposingRef.current = false;
-    if (editorTextareaRef.current) {
-      textareaValueRef.current = editorTextareaRef.current.value;
-    }
   }, []);
 
   const handleSave = useCallback(() => {
-    if (selectedFile && editorTextareaRef.current) {
-      const contentToSave = editorTextareaRef.current.value;
-      textareaValueRef.current = contentToSave;
-      onSaveFile(contentToSave);
+    if (selectedFile && editorContent) {
+      onSaveFile(editorContent);
     }
-  }, [selectedFile, onSaveFile]);
+  }, [selectedFile, editorContent, onSaveFile]);
 
   const handleCancelEdit = useCallback(() => {
-    if (selectedFile && editorTextareaRef.current) {
+    if (selectedFile) {
       const originalContent = selectedFile.content;
-      editorTextareaRef.current.value = originalContent;
-      textareaValueRef.current = originalContent;
+      setEditorContent(originalContent);
       
-      editorTextareaRef.current.style.height = 'auto';
-      editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
+      if (editorTextareaRef.current) {
+        editorTextareaRef.current.value = originalContent;
+        
+        requestAnimationFrame(() => {
+          if (editorTextareaRef.current) {
+            editorTextareaRef.current.style.height = 'auto';
+            editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
+          }
+        });
+      }
       
       onCancelEdit();
     }
@@ -971,16 +1101,26 @@ const ArtifactManager = React.memo(({
 
   const handleFileSelect = useCallback((file, e) => {
     if (e) e.stopPropagation();
-    onSelectFile(file);
+    
+    // Get the latest version of the file from currentArtifacts
+    const currentFileFromState = currentArtifacts.find(f => f.path === file.path);
+    const freshFile = currentFileFromState 
+      ? { ...currentFileFromState } 
+      : { ...file };
+    
+    onSelectFile(freshFile);
     onSetEditing(false);
     onSetViewMode('editor');
     if (isMobile) onSetMobilePanel('editor');
-  }, [onSelectFile, onSetEditing, onSetViewMode, isMobile, onSetMobilePanel]);
+    
+    // Force update the editor content
+    setEditorContent(freshFile.content);
+  }, [onSelectFile, onSetEditing, onSetViewMode, isMobile, onSetMobilePanel, currentArtifacts]);
 
+  // Sync editor content when selectedFile changes
   useEffect(() => {
-    if (selectedFile && editorTextareaRef.current) {
-      textareaValueRef.current = selectedFile.content;
-      setTextareaValue(selectedFile.content);
+    if (selectedFile) {
+      setEditorContent(selectedFile.content);
       
       if (editorTextareaRef.current) {
         editorTextareaRef.current.value = selectedFile.content;
@@ -992,8 +1132,32 @@ const ArtifactManager = React.memo(({
           }
         });
       }
+    } else {
+      setEditorContent('');
     }
   }, [selectedFile]);
+
+  // Watch for changes in currentArtifacts and update if selectedFile changes
+  useEffect(() => {
+    if (selectedFile && currentArtifacts.length > 0) {
+      const updatedFile = currentArtifacts.find(file => file.path === selectedFile.path);
+      if (updatedFile && updatedFile.content !== editorContent && !isEditing) {
+        console.log('📁 Detected external file change, updating editor');
+        setEditorContent(updatedFile.content);
+        
+        if (editorTextareaRef.current) {
+          editorTextareaRef.current.value = updatedFile.content;
+          
+          requestAnimationFrame(() => {
+            if (editorTextareaRef.current) {
+              editorTextareaRef.current.style.height = 'auto';
+              editorTextareaRef.current.style.height = `${editorTextareaRef.current.scrollHeight}px`;
+            }
+          });
+        }
+      }
+    }
+  }, [currentArtifacts, selectedFile, isEditing, editorContent]);
 
   useEffect(() => {
     if (isEditing && selectedFile && editorTextareaRef.current) {
@@ -1155,7 +1319,7 @@ const ArtifactManager = React.memo(({
               {viewMode === 'editor' ? (
                 <textarea
                   ref={editorTextareaRef}
-                  defaultValue={selectedFile.content}
+                  value={editorContent}
                   onChange={handleEditorChange}
                   onCompositionStart={handleCompositionStart}
                   onCompositionEnd={handleCompositionEnd}
@@ -1170,7 +1334,7 @@ const ArtifactManager = React.memo(({
                   data-gramm_editor="false"
                   data-enable-grammarly="false"
                   suppressHydrationWarning
-                  key={`editor-${selectedFile.id}-${isEditing ? 'editing' : 'readonly'}`}
+                  key={`editor-${selectedFile?.id}-${isEditing ? 'editing' : 'readonly'}`}
                 />
               ) : (
                 <div className="code-preview">
@@ -1209,6 +1373,7 @@ const ArtifactManager = React.memo(({
     selectedFile,
     viewMode,
     isEditing,
+    editorContent,
     handleSave,
     handleCancelEdit,
     handleDelete,
@@ -1280,10 +1445,10 @@ export default function App() {
   const [lastSaveTime, setLastSaveTime] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [editedContent, setEditedContent] = useState('');
   const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState('editor');
+  const [fileChangeCounter, setFileChangeCounter] = useState(0);
 
   const abortControllerRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -2022,6 +2187,9 @@ export default function App() {
       );
       localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
     }
+    
+    // Increment file change counter to trigger re-renders
+    setFileChangeCounter(prev => prev + 1);
   }, [artifacts, currentConversationId, saveArtifacts, conversations]);
 
   useEffect(() => {
@@ -2045,6 +2213,17 @@ export default function App() {
       setShowEmptyState(true);
     }
   }, [currentConversationId, artifacts, initialLoadComplete, showArtifacts]);
+
+  // Watch for file changes and update selected file
+  useEffect(() => {
+    if (selectedFile && currentArtifacts.length > 0) {
+      const updatedFile = currentArtifacts.find(file => file.path === selectedFile.path);
+      if (updatedFile && updatedFile.content !== selectedFile.content) {
+        console.log('📁 File content updated externally, refreshing selected file');
+        setSelectedFile({ ...updatedFile });
+      }
+    }
+  }, [currentArtifacts, selectedFile, fileChangeCounter]);
 
   useEffect(() => {
     return () => {
@@ -2112,6 +2291,42 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [messages.length]);
+
+  // 🎯 HEALTH CHECK
+  const checkOllamaHealth = useCallback(async () => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      
+      const response = await fetch(`${APP_CONFIG.OLLAMA_BASE}/api/tags`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      return response.ok;
+    } catch (error) {
+      console.error('Health check failed:', error);
+      return false;
+    }
+  }, []);
+
+  useEffect(() => {
+    const checkConnection = async () => {
+      const isHealthy = await checkOllamaHealth();
+      if (!isHealthy && !ollamaError) {
+        setOllamaError("Cannot connect to Ollama. Make sure it's running.");
+      } else if (isHealthy && ollamaError && ollamaError.includes("Cannot connect")) {
+        setOllamaError(null);
+      }
+    };
+    
+    checkConnection();
+    const interval = setInterval(checkConnection, 30000);
+    
+    return () => clearInterval(interval);
+  }, [checkOllamaHealth, ollamaError]);
 
   // 🎯 EVENT HANDLERS
   const handleImageSelect = useCallback((file) => {
@@ -2522,7 +2737,6 @@ if __name__ == "__main__":
     saveArtifacts(updatedArtifactsObj);
     
     setSelectedFile(newFile);
-    setEditedContent(defaultContent);
     setIsEditing(true);
     setViewMode('editor');
     
@@ -2580,6 +2794,29 @@ if __name__ == "__main__":
     setShowCreateMenu(false);
     setShowEmptyState(false);
   }, [currentArtifacts, currentConversationId, artifacts, saveArtifacts, newFolderName]);
+
+const retryMessage = useCallback(async (messageId) => {
+  const messageToRetry = messages.find(m => m.id === messageId);
+  if (!messageToRetry || messageToRetry.role !== 'user') return;
+  
+  // Remove the failed assistant response if exists
+  const messageIndex = messages.findIndex(m => m.id === messageId);
+  if (messageIndex < messages.length - 1) {
+    const nextMessage = messages[messageIndex + 1];
+    if (nextMessage.role === 'assistant' && (nextMessage.isError || nextMessage.content.includes('Error'))) {
+      setMessages(prev => prev.filter((_, idx) => idx !== messageIndex + 1));
+    }
+  }
+  
+  // Set input and send
+  setInput(messageToRetry.content);
+  
+  // Use a small delay to ensure state updates, then manually trigger send
+  setTimeout(() => {
+    // Instead of calling sendMessage directly, we'll handle this differently
+    // by triggering the send action through state or ref
+  }, 100);
+}, [messages]); // ✅ Remove sendMessage from dependencies
 
   // 🎯 INITIAL LOAD
   useEffect(() => {
@@ -2685,7 +2922,38 @@ if __name__ == "__main__":
     if (!selectedModel) { setOllamaError("Select a model to continue."); return; }
     if (messages.length >= APP_CONFIG.LIMITS.MAX_MESSAGES) { setOllamaError("Max messages reached. Clear chat."); return; }
 
-    if (!currentConversationId && conversations.length === 0) createNewConversation();
+    // Health check
+    const isHealthy = await checkOllamaHealth();
+    if (!isHealthy) {
+      setOllamaError("Cannot connect to Ollama. Make sure it's running.");
+      return;
+    }
+
+    // 🚨 FIX: Ensure we have a conversation ID before proceeding
+    let convId = currentConversationId;
+    if (!convId || (conversations.length === 0 && !convId)) {
+      // Create a new conversation immediately
+      const newConvId = generateSafeId('conv');
+      const newConversation = {
+        id: newConvId,
+        title: trimmedInput.substring(0, 50) + (trimmedInput.length > 50 ? '...' : ''),
+        messages: [],
+        lastUpdated: new Date().toISOString(),
+        active: true,
+        artifactCount: currentArtifacts.length
+      };
+      
+      // Update state immediately
+      setCurrentConversationId(newConvId);
+      convId = newConvId;
+      
+      // Add to conversations list
+      const updatedConversations = [newConversation];
+      setConversations(updatedConversations);
+      
+      // Save to localStorage
+      localStorage.setItem(APP_CONFIG.STORAGE_KEYS.CONVERSATIONS, JSON.stringify(updatedConversations));
+    }
 
     const fileContext = getCurrentFileContext();
     const combinedSystemPrompt = systemPrompt.trim() ? 
@@ -2700,27 +2968,38 @@ if __name__ == "__main__":
       timestamp: new Date().toISOString(), 
       ...(imagePreview && { image: imagePreview }) 
     };
+    
+    // Create assistant message with proper initial state
+    const assistantMessageId = generateSafeId('msg-assistant');
     const assistantMessage = { 
       role: "assistant", 
       content: "", 
-      id: generateSafeId('msg'), 
+      id: assistantMessageId, 
       isStreaming: true, 
-      timestamp: new Date().toISOString() 
+      timestamp: new Date().toISOString(),
+      parsedResponse: null
     };
 
+    // Add messages to state immediately
     const messagesWithNew = [...messages, userMessage, assistantMessage];
     setMessages(messagesWithNew);
     setInput("");
     setOllamaError(null);
     setIsLoading(true);
+    
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
+      textareaRef.current.blur(); // Remove focus to prevent keyboard issues
     }
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    const historyForApi = [{ role: "system", content: combinedSystemPrompt }, ...messages.slice(-20), userMessage];
+    const historyForApi = [
+      { role: "system", content: combinedSystemPrompt }, 
+      ...messages.slice(-20), 
+      userMessage
+    ];
 
     try {
       const res = await fetch(`${APP_CONFIG.OLLAMA_BASE}/api/chat`, {
@@ -2728,62 +3007,120 @@ if __name__ == "__main__":
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: selectedModel,
-          messages: historyForApi.map(msg => msg.image ? { role: msg.role, content: msg.content, images: [msg.image.split(',')[1]] } : msg),
+          messages: historyForApi.map(msg => msg.image ? { 
+            role: msg.role, 
+            content: msg.content, 
+            images: [msg.image.split(',')[1]] 
+          } : msg),
           stream: true,
-          options: { temperature: 0.7, top_p: 0.9 }
+          options: { 
+            temperature: 0.7, 
+            top_p: 0.9,
+            num_ctx: 4096  // Add context size
+          }
         }),
         signal: controller.signal,
       });
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`HTTP ${res.status}: ${errorText}`);
+      }
+      
       if (!res.body) throw new Error("Streaming not supported");
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let buffer = "";
       let fullContent = "";
-      let lastUpdateTime = 0;
-      const UPDATE_INTERVAL = 16;
+      let lastUpdateTime = Date.now();
+      const UPDATE_INTERVAL = 50; // Increased for better reliability
 
       const updateMessageContent = (content) => {
+        // Use functional update to ensure we're working with latest state
         setMessages(prev => prev.map(m => 
-          m.id === assistantMessage.id ? { 
+          m.id === assistantMessageId ? { 
             ...m, 
             content: content,
-            isStreaming: true 
+            isStreaming: true  // Keep streaming flag true while receiving
           } : m
         ));
       };
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done || controller.signal.aborted) break;
-        buffer += decoder.decode(value, { stream: true });
+      // Force initial render
+      updateMessageContent("");
 
-        let idx;
-        while ((idx = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, idx).trim();
-          buffer = buffer.slice(idx + 1);
-          if (!line) continue;
-          try {
-            const json = JSON.parse(line);
-            if (json.message?.content) { 
-              fullContent += json.message.content;
-              
-              const now = Date.now();
-              if (now - lastUpdateTime > UPDATE_INTERVAL || fullContent.length % 3 === 0) {
-                updateMessageContent(fullContent);
-                lastUpdateTime = now;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done || controller.signal.aborted) {
+            console.log("✅ Stream completed normally");
+            break;
+          }
+          
+          buffer += decoder.decode(value, { stream: true });
+
+          let newlineIndex;
+          while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+            
+            if (!line) continue;
+            
+            try {
+              const json = JSON.parse(line);
+              if (json.message?.content) { 
+                fullContent += json.message.content;
+                
+                const now = Date.now();
+                // Update more aggressively for immediate feedback
+                if (now - lastUpdateTime > UPDATE_INTERVAL || fullContent.length % 2 === 0) {
+                  updateMessageContent(fullContent);
+                  lastUpdateTime = now;
+                }
+                
+                // Force a re-render periodically
+                if (fullContent.length % 10 === 0) {
+                  await new Promise(resolve => setTimeout(resolve, 0));
+                }
               }
+              
+              // Handle error response
+              if (json.error) {
+                console.error("Stream error:", json.error);
+                throw new Error(json.error);
+              }
+            } catch (parseError) {
+              console.warn("Failed to parse JSON line:", line, parseError);
             }
-          } catch {}
+          }
         }
+      } catch (streamError) {
+        console.error("Stream reading error:", streamError);
+        throw streamError;
+      } finally {
+        reader.releaseLock();
       }
 
+      // Final update with complete content
       updateMessageContent(fullContent);
 
+      // Parse response AFTER stream completes
       const parsedResponse = parseLLMResponse(fullContent);
       
+      // Final update with parsed response
+      setMessages(prev => prev.map(m => 
+        m.id === assistantMessageId ? { 
+          ...m, 
+          content: fullContent,
+          parsedResponse: parsedResponse,
+          isStreaming: false, // Mark as no longer streaming
+          timestamp: new Date().toISOString()
+        } : m
+      ));
+
+      // Handle artifacts
       if (parsedResponse.artifacts.length > 0) {
         const enhancedArtifacts = parsedResponse.artifacts.map(artifact => {
           const isDuplicate = currentArtifacts.some(existing => 
@@ -2818,6 +3155,7 @@ if __name__ == "__main__":
           
           setShowEmptyState(false);
           
+          // Update message with artifact info
           parsedResponse.artifacts = enhancedArtifacts.map(art => ({
             ...art,
             addedToProject: true
@@ -2831,43 +3169,42 @@ if __name__ == "__main__":
         }
       }
       
-      const finalMessages = messagesWithNew.map(m => 
-        m.id === assistantMessage.id ? { 
-          ...m, 
-          content: parsedResponse.content, 
-          parsedResponse: parsedResponse,
-          isStreaming: false 
-        } : m
-      );
-      
-      setMessages(finalMessages);
-      
+      // Save conversations
       saveConversations();
       
     } catch (err) {
+      console.error("❌ Chat error:", err);
+      
       if (err.name === "AbortError") { 
-        setMessages(prev => prev.slice(0, -1)); 
-        setIsLoading(false); 
-        abortControllerRef.current = null; 
-        return; 
+        console.log("⚠️ Request was aborted");
+        setMessages(prev => prev.filter(m => m.id !== assistantMessageId));
+      } else {
+        // Update with error message
+        setMessages(prev => prev.map(m => 
+          m.id === assistantMessageId ? { 
+            ...m, 
+            content: `⚠️ Error: ${err.message}`, 
+            isError: true, 
+            isStreaming: false,
+            parsedResponse: null
+          } : m
+        ));
+        
+        setOllamaError(`Failed to get response: ${err.message}`);
       }
-      setMessages(prev => prev.map(m => 
-        m.id === assistantMessage.id ? { 
-          ...m, 
-          content: `⚠️ Error: ${err.message}`, 
-          isError: true, 
-          isStreaming: false 
-        } : m
-      ));
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
       setImageFile(null);
       setImagePreview(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
-      setTimeout(() => textareaRef.current?.focus(), 100);
+      
+      // Refocus textarea after a delay
+      setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 100);
     }
-  }, [input, isLoading, messages, selectedModel, systemPrompt, imageFile, imagePreview, currentConversationId, conversations, createNewConversation, showArtifacts, currentArtifacts, handleArtifactUpdate, getCurrentFileContext, parseLLMResponse, saveConversations]);
+  }, [input, isLoading, messages, selectedModel, systemPrompt, imageFile, imagePreview, currentConversationId, conversations, createNewConversation, showArtifacts, currentArtifacts, handleArtifactUpdate, getCurrentFileContext, parseLLMResponse, saveConversations, checkOllamaHealth]);
 
   const handleKeyDown = useCallback((e) => { 
     if (e.key === "Enter" && e.ctrlKey) { 
@@ -2999,8 +3336,6 @@ if __name__ == "__main__":
   const handleSaveFile = useCallback((contentToSave) => {
     if (!selectedFile) return;
     
-    setEditedContent(contentToSave);
-    
     const updatedArtifacts = currentArtifacts.map(art => 
       art.path === selectedFile.path ? { ...art, content: contentToSave } : art
     );
@@ -3020,7 +3355,11 @@ if __name__ == "__main__":
     setIsEditing(false);
     setShowEmptyState(false);
     
+    // Update selectedFile with new content
     setSelectedFile(prev => prev ? { ...prev, content: contentToSave } : null);
+    
+    // Increment change counter
+    setFileChangeCounter(prev => prev + 1);
   }, [selectedFile, currentArtifacts, currentConversationId, artifacts, saveArtifacts]);
 
   const handleDeleteFile = useCallback((filePath) => {
@@ -3046,6 +3385,9 @@ if __name__ == "__main__":
     if (updatedArtifacts.length === 0) {
       setShowEmptyState(true);
     }
+    
+    // Increment change counter
+    setFileChangeCounter(prev => prev + 1);
   }, [currentArtifacts, selectedFile, currentConversationId, artifacts, saveArtifacts, isMobile]);
 
   // 🎯 OPTIMIZED SUB-COMPONENTS
@@ -3878,112 +4220,115 @@ if __name__ == "__main__":
     );
   });
 
-  const SidePanel = React.memo(() => {
-    const formatPreview = useCallback((messages) => {
-      if (!messages || messages.length === 0) return 'No messages yet';
-      const lastMessage = messages[messages.length - 1];
-      return (lastMessage.content || '').substring(0, 50) + ((lastMessage.content?.length || 0) > 50 ? '...' : '');
-    }, []);
+const SidePanel = React.memo(() => {
+  const formatPreview = useCallback((messages) => {
+    if (!messages || messages.length === 0) return 'No messages yet';
+    const lastMessage = messages[messages.length - 1];
+    return (lastMessage.content || '').substring(0, 50) + ((lastMessage.content?.length || 0) > 50 ? '...' : '');
+  }, []);
 
-    const formatDateShort = useCallback((timestamp) => {
-      const date = new Date(timestamp);
-      const now = new Date();
-      const days = Math.floor((now - date) / (1000 * 60 * 60 * 24));
-      
-      if (days === 0) return 'Today';
-      if (days === 1) return 'Yesterday';
-      if (days < 7) return `${days}d ago`;
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    }, []);
+  const formatDateShort = useCallback((timestamp) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const days = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+    
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Yesterday';
+    if (days < 7) return `${days}d ago`;
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }, []);
 
-    useEffect(() => {
-      const handleEscape = (e) => { if (e.key === 'Escape' && showSidePanel) setShowSidePanel(false); };
-      document.addEventListener('keydown', handleEscape);
-      return () => document.removeEventListener('keydown', handleEscape);
-    }, [showSidePanel]);
+  useEffect(() => {
+    const handleEscape = (e) => { if (e.key === 'Escape' && showSidePanel) setShowSidePanel(false); };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [showSidePanel]);
 
-    return (
-      <>
-        <div className={`side-panel-overlay ${showSidePanel ? 'active' : ''}`} onClick={() => setShowSidePanel(false)} />
-        <div className={`side-panel ${showSidePanel ? 'active' : ''}`}>
-          <div className="side-panel-header">
-            <h2 className="side-panel-title">Chat History</h2>
-            <button onClick={() => setShowSidePanel(false)} className="side-panel-close" aria-label="Close side panel">×</button>
+  return (
+    <>
+      <div className={`side-panel-overlay ${showSidePanel ? 'active' : ''}`} onClick={() => setShowSidePanel(false)} />
+      <div className={`side-panel ${showSidePanel ? 'active' : ''}`}>
+        <div className="side-panel-header">
+          <h2 className="side-panel-title">Chat History</h2>
+          <button onClick={() => setShowSidePanel(false)} className="side-panel-close" aria-label="Close side panel">×</button>
+        </div>
+
+        <div className="side-panel-content">
+          <div className="side-panel-section">
+            <h3 className="side-panel-section-title">Current Model</h3>
+            <div className="model-info-card">
+              <div className="model-info-header">
+                <h4 className="model-info-name">{selectedModel || 'No model selected'}</h4>
+                <span className="model-info-tag">Active</span>
+              </div>
+              <div className="model-info-details">
+                <div className="model-info-detail">
+                  <span className="model-info-label">Prompt</span>
+                  <span className="model-info-value">{systemPrompt ? 'Custom' : 'Default'}</span>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div className="side-panel-content">
-            <div className="side-panel-section">
-              <h3 className="side-panel-section-title">Current Model</h3>
-              <div className="model-info-card">
-                <div className="model-info-header">
-                  <h4 className="model-info-name">{selectedModel || 'No model selected'}</h4>
-                  <span className="model-info-tag">Active</span>
-                </div>
-                <div className="model-info-details">
-                  <div className="model-info-detail">
-                    <span className="model-info-label">Prompt</span>
-                    <span className="model-info-value">{systemPrompt ? 'Custom' : 'Default'}</span>
-                  </div>
-                </div>
-              </div>
+          <div className="side-panel-section conversation-section">
+            <div className="section-header">
+              <h3 className="section-title">Conversations</h3>
+              <button onClick={createNewConversation} className="new-convo-button" title="New Conversation" aria-label="New conversation">
+                <Plus size={16} />
+              </button>
             </div>
-
-            <div className="side-panel-section conversation-section">
-              <div className="section-header">
-                <h3 className="section-title">Conversations</h3>
-                <button onClick={createNewConversation} className="new-convo-button" title="New Conversation" aria-label="New conversation">
-                  <Plus size={16} />
-                </button>
-              </div>
-              
-              <div className="conversation-list">
-                {conversations.length === 0 ? (
-                  <div className="empty-state">
-                    <div className="empty-state-icon">💬</div>
-                    <p className="empty-state-text">No conversations yet</p>
-                  </div>
-                ) : (
-                  conversations.slice(0, 20).map((conv) => {
-                    const conversationTitle = conv.title || 
-                      (conv.messages?.length > 0 
-                        ? (conv.messages[0]?.content?.substring(0, 50) + (conv.messages[0]?.content?.length > 50 ? '...' : ''))
-                        : 'New Conversation');
-                    
-                    return (
-                      <div key={`conversation-${conv.id}`} className={`conversation-item ${conv.active ? 'active' : ''}`} onClick={() => selectConversation(conv)} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && selectConversation(conv)}>
-                        <div className="conversation-icon"><History size={14} /></div>
-                        <div className="conversation-content">
-                          <div className="conversation-title">{conversationTitle}</div>
-                          <div className="conversation-preview">{formatPreview(conv.messages)}</div>
-                          <div className="conversation-date">{formatDateShort(conv.lastUpdated)}</div>
-                        </div>
-                        <div className="conversation-actions">
-                          <button onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }} className="conversation-delete" title="Delete" aria-label={`Delete conversation ${conv.title}`}>
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
+            
+            <div className="conversation-list">
+              {conversations.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-state-icon">💬</div>
+                  <p className="empty-state-text">No conversations yet</p>
+                </div>
+              ) : (
+                conversations.slice(0, 20).map((conv) => {
+                  const conversationTitle = conv.title || 
+                    (conv.messages?.length > 0 
+                      ? (conv.messages[0]?.content?.substring(0, 50) + (conv.messages[0]?.content?.length > 50 ? '...' : ''))
+                      : 'New Conversation');
+                  
+                  // 🚨 FIX: Check if this conversation is the active one
+                  const isActive = conv.id === currentConversationId;
+                  
+                  return (
+                    <div key={`conversation-${conv.id}`} className={`conversation-item ${isActive ? 'active' : ''}`} onClick={() => selectConversation(conv)} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && selectConversation(conv)}>
+                      <div className="conversation-icon"><History size={14} /></div>
+                      <div className="conversation-content">
+                        <div className="conversation-title">{conversationTitle}</div>
+                        <div className="conversation-preview">{formatPreview(conv.messages)}</div>
+                        <div className="conversation-date">{formatDateShort(conv.lastUpdated)}</div>
                       </div>
-                    );
-                  })
-                )}
-              </div>
+                      <div className="conversation-actions">
+                        <button onClick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }} className="conversation-delete" title="Delete" aria-label={`Delete conversation ${conv.title}`}>
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
+          </div>
 
-            <div className="data-management-section">
-              <div className="panel-actions">
-                <button onClick={() => setShowStorageManagement(true)} className="panel-button" aria-label="Storage management"><HardDrive size={16} />Storage</button>
-                <button onClick={exportConversations} className="panel-button" aria-label="Export conversations"><Download size={16} />Export</button>
-                <button onClick={importConversations} className="panel-button" aria-label="Import conversations"><Upload size={16} />Import</button>
-                {conversations.length > 0 && (
-                  <button onClick={clearAllConversations} className="panel-button danger" aria-label="Clear all conversations"><Trash2 size={16} />Clear All</button>
-                )}
-              </div>
+          <div className="data-management-section">
+            <div className="panel-actions">
+              <button onClick={() => setShowStorageManagement(true)} className="panel-button" aria-label="Storage management"><HardDrive size={16} />Storage</button>
+              <button onClick={exportConversations} className="panel-button" aria-label="Export conversations"><Download size={16} />Export</button>
+              <button onClick={importConversations} className="panel-button" aria-label="Import conversations"><Upload size={16} />Import</button>
+              {conversations.length > 0 && (
+                <button onClick={clearAllConversations} className="panel-button danger" aria-label="Clear all conversations"><Trash2 size={16} />Clear All</button>
+              )}
             </div>
           </div>
         </div>
-      </>
-    );
-  });
+      </div>
+    </>
+  );
+});
 
   const DiffViewerPage = React.memo(({ edit, onClose }) => {
     const [applying, setApplying] = useState(false);
@@ -4244,6 +4589,7 @@ if __name__ == "__main__":
                 </div>
               </div>
               <ArtifactManager 
+                key={`artifact-manager-${currentConversationId}-${fileChangeCounter}`}
                 isMobile={isMobile} 
                 currentConversationId={currentConversationId}
                 currentArtifacts={currentArtifacts}
